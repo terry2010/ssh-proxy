@@ -9,14 +9,14 @@ use russh::client;
 use russh::ChannelMsg;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, oneshot};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 use termfast_core::ssh::pty;
 
 /// Commands sent to a terminal session's write task
 enum TerminalCmd {
-    Input(Vec<u8>),
+    Input(Vec<u8>, Option<oneshot::Sender<()>>),
     Resize(u32, u32),
     Close,
 }
@@ -163,11 +163,14 @@ impl TerminalManager {
             tracing::info!("terminal write task started for {}", sid);
             while let Some(cmd) = cmd_rx.recv().await {
                 match cmd {
-                    TerminalCmd::Input(data) => {
+                    TerminalCmd::Input(data, ack) => {
                         // With a PTY the remote tty line discipline handles
                         // echo and CR/LF translation, so input bytes are sent
                         // raw (xterm.js sends \r on Enter, which is correct).
-                        tracing::info!("terminal write task input len={} data={:?} for session {}", data.len(), String::from_utf8_lossy(&data), sid);
+                        // Skip noisy logging for large ZMODEM payloads.
+                        if data.len() <= 64 {
+                            tracing::info!("terminal write task input len={} data={:?} for session {}", data.len(), String::from_utf8_lossy(&data), sid);
+                        }
                         // Retry loop: during large ZMODEM transfers the SSH send
                         // window can temporarily fill up.  A short timeout would
                         // silently drop bytes, corrupting the transfer.  Use a
@@ -210,6 +213,10 @@ impl TerminalManager {
                                 }
                             }
                         }
+                        // Notify the caller that the data has been sent (or failed).
+                        if let Some(tx) = ack {
+                            let _ = tx.send(());
+                        }
                     }
                     TerminalCmd::Resize(c, r) => {
                         if let Err(e) = write_half.window_change(c, r, 0, 0).await {
@@ -237,21 +244,63 @@ impl TerminalManager {
         Ok((session_id, initial_output))
     }
 
-    /// Send user input to the terminal
+    /// Send user input to the terminal.
+    ///
+    /// When `wait_for_send` is true, this function blocks until the SSH write
+    /// task has actually sent the bytes over the channel (or timed out).  This
+    /// provides backpressure for large ZMODEM transfers so the caller doesn't
+    /// queue data faster than SSH can transmit it.
     pub async fn input(&self, session_id: &str, data: &str) -> Result<(), String> {
-        let sessions = self.sessions.lock().await;
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| format!("terminal session not found: {}", session_id))?;
-        // Data is base64-encoded to support binary input (e.g. ZMODEM file transfers)
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(data)
-            .map_err(|e| format!("failed to decode base64 input: {}", e))?;
-        tracing::info!("TerminalManager::input sending {} bytes to session {}", decoded.len(), session_id);
-        session
-            .cmd_tx
-            .send(TerminalCmd::Input(decoded))
-            .map_err(|e| format!("failed to send terminal input: {}", e))
+        self.input_with_ack(session_id, data, true).await
+    }
+
+    /// Same as `input` but optionally waits for SSH send completion.
+    pub async fn input_with_ack(
+        &self,
+        session_id: &str,
+        data: &str,
+        wait_for_send: bool,
+    ) -> Result<(), String> {
+        let (ack_tx, ack_rx) = if wait_for_send {
+            let (tx, rx) = oneshot::channel();
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
+
+        {
+            let sessions = self.sessions.lock().await;
+            let session = sessions
+                .get(session_id)
+                .ok_or_else(|| format!("terminal session not found: {}", session_id))?;
+            // Data is base64-encoded to support binary input (e.g. ZMODEM file transfers)
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .map_err(|e| format!("failed to decode base64 input: {}", e))?;
+            if decoded.len() <= 64 {
+                tracing::info!(
+                    "TerminalManager::input sending {} bytes to session {}",
+                    decoded.len(),
+                    session_id,
+                );
+            }
+            session
+                .cmd_tx
+                .send(TerminalCmd::Input(decoded, ack_tx))
+                .map_err(|e| format!("failed to send terminal input: {}", e))?;
+        }
+
+        // Wait for the write task to confirm the bytes were sent over SSH.
+        // This provides backpressure: the IPC call won't resolve until SSH
+        // has actually transmitted the data (or the 120s timeout fires).
+        if let Some(rx) = ack_rx {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(130),
+                rx,
+            ).await;
+        }
+
+        Ok(())
     }
 
     /// Resize the terminal PTY

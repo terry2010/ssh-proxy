@@ -345,12 +345,14 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
       rows: term.rows,
     }).catch(() => {});
 
-    // Helper: send raw bytes to backend (base64-encoded for binary safety)
-    const sendToBackend = (bytes: Uint8Array | number[]) => {
-      ipcInvoke("ipc_terminal_input", {
+    // Helper: send raw bytes to backend (base64-encoded for binary safety).
+    // Returns a promise that resolves when the daemon has confirmed the bytes
+    // were sent over SSH — this provides backpressure for large ZMODEM uploads.
+    const sendToBackend = (bytes: Uint8Array | number[]): Promise<void> => {
+      return ipcInvoke("ipc_terminal_input", {
         session_id: sessionIdRef.current,
         data: bytesToBase64(bytes),
-      }).catch(() => {});
+      }).then(() => {}).catch(() => {});
     };
 
     // --- ZMODEM Sentry ---
@@ -364,6 +366,11 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
     // Blocks the sender callback so no ZSINIT keepalive or other protocol
     // bytes escape to the PTY after the session is done.
     let zmodemEnding = false;
+    // Tracks the most recent sender promise (from the zmodem.js-ex sender
+    // callback).  The upload loop awaits this before sending the next chunk,
+    // creating backpressure so progress doesn't race ahead of actual SSH
+    // transmission.
+    let lastSenderPromise: Promise<void> | null = null;
     // Track the last active session type so to_terminal can suppress garbage
     // during Receive (download) sessions but still write trailing shell output.
     let lastZmodemSessionType: string | null = null;
@@ -570,6 +577,7 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
       sessAny._keepalive_promise = null;
       sessAny._sender = function () { /* dead session */ };
       zmodemEnding = false;
+      lastSenderPromise = null;
       zmodemSession = null;
       zmodemCooldownUntil = Date.now() + 10000;
       clearSentryState();
@@ -652,6 +660,17 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
                 const buf = await slice.arrayBuffer();
                 xfer.send(new Uint8Array(buf));
 
+                // Wait for the previous chunk to be actually sent over SSH
+                // before proceeding.  Without this, xfer.send() queues data
+                // into the sender callback (which is fire-and-forget from
+                // zmodem.js-ex's perspective), get_offset() races ahead, and
+                // the progress bar shows 99% while the server has only
+                // received a fraction of the file.
+                if (lastSenderPromise) {
+                  await lastSenderPromise;
+                  lastSenderPromise = null;
+                }
+
                 const currentOffset = (xfer as any).get_offset() as number;
                 const received = currentOffset - startOffset;
                 // Cap at 99% while data is still streaming; the final 1% is
@@ -667,10 +686,12 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
                     total,
                     percent,
                   });
-                  if (percent % 5 === 0) {
-                    console.log(`[ZMODEM] upload progress: ${percent}% (${received}/${total})`);
-                  }
                 }
+              }
+              // Wait for the final chunk to be sent before ending the file.
+              if (lastSenderPromise) {
+                await lastSenderPromise;
+                lastSenderPromise = null;
               }
             }
             console.log(`[ZMODEM] rz: sent ${(xfer as any).get_offset()} bytes, ending file`);
@@ -758,8 +779,11 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
           console.log("[ZMODEM] sender BLOCKED:", "session=", !!zmodemSession, "ending=", zmodemEnding, "cooldown=", Date.now() < zmodemCooldownUntil, "len=", octets.length);
           return;
         }
-        console.log("[ZMODEM] sender sending", octets.length, "bytes, first4:", octets.slice(0, 4).join(","));
-        sendToBackend(octets);
+        // Store the promise so the upload loop can await it for backpressure.
+        // zmodem.js-ex calls sender synchronously, so we can't await here,
+        // but the upload loop awaits lastSenderPromise before sending the
+        // next chunk.
+        lastSenderPromise = sendToBackend(octets);
       },
       on_detect: (detection: ZmodemDetection) => {
         // Cooldown: after a session ends, ignore spurious detections from
