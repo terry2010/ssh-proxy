@@ -134,6 +134,8 @@
     "test": "测试代理",
     "on": "代理开",
     "off": "代理关",
+    "not_connected": "未连接",
+    "started": "已启动",
     "toggle": "切换代理"
   },
   "trigger": {

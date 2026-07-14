@@ -781,7 +781,7 @@ export function ServerDetail() {
                 <div>
                   <div className="text-xs text-gray-500 uppercase tracking-wider font-medium">{t("server.proxy")}</div>
                   <div className={`text-xl font-bold mt-1 ${server.proxy_running ? "text-green-500" : "text-gray-400"}`}>
-                    {server.proxy_running ? t("proxy.on") : t("proxy.off")}
+                    {!isConnected ? t("proxy.not_connected") : (server.proxy_running ? t("proxy.started") : t("proxy.off"))}
                   </div>
                 </div>
                 <button
@@ -803,61 +803,83 @@ export function ServerDetail() {
                   {server.proxy.mixed_port > 0 ? (
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-gray-500 font-medium">Mixed</span>
-                      <input
-                        type="number"
-                        className="appearance-none w-14 px-2 py-1.5 text-sm font-mono border border-gray-200 dark:border-gray-600 rounded-lg bg-transparent text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:focus:ring-blue-900/30 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                        value={server.proxy.mixed_port}
-                        onChange={(e) => handleUpdateProxy({ mixed_port: parseInt(e.target.value) || 0 })}
-                        disabled={server.proxy_running}
-                      />
+                      {server.proxy_running ? (
+                        <span className="text-sm font-mono text-gray-900 dark:text-gray-100">{server.proxy.mixed_port}</span>
+                      ) : (
+                        <input
+                          type="number"
+                          className="appearance-none w-14 px-2 py-1.5 text-sm font-mono border border-gray-200 dark:border-gray-600 rounded-lg bg-transparent text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:focus:ring-blue-900/30 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                          value={server.proxy.mixed_port}
+                          onChange={(e) => handleUpdateProxy({ mixed_port: parseInt(e.target.value) || 0 })}
+                          disabled={server.proxy_running}
+                        />
+                      )}
                     </div>
                   ) : (
                     <>
                       <div className="flex items-center gap-2">
                         <span className="text-xs text-gray-500 font-medium">SOCKS5</span>
-                        <input
-                          type="number"
-                          className="appearance-none w-14 px-2 py-1.5 text-sm font-mono border border-gray-200 dark:border-gray-600 rounded-lg bg-transparent text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:focus:ring-blue-900/30 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                          value={server.proxy.socks5_port}
-                          onChange={(e) => handleUpdateProxy({ socks5_port: parseInt(e.target.value) || 1080 })}
-                          disabled={server.proxy_running}
-                        />
+                        {server.proxy_running ? (
+                          <span className="text-sm font-mono text-gray-900 dark:text-gray-100">{server.proxy.socks5_port}</span>
+                        ) : (
+                          <input
+                            type="number"
+                            className="appearance-none w-14 px-2 py-1.5 text-sm font-mono border border-gray-200 dark:border-gray-600 rounded-lg bg-transparent text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:focus:ring-blue-900/30 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            value={server.proxy.socks5_port}
+                            onChange={(e) => handleUpdateProxy({ socks5_port: parseInt(e.target.value) || 1080 })}
+                            disabled={server.proxy_running}
+                          />
+                        )}
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="text-xs text-gray-500 font-medium">HTTP</span>
-                        <input
-                          type="number"
-                          className="appearance-none w-14 px-2 py-1.5 text-sm font-mono border border-gray-200 dark:border-gray-600 rounded-lg bg-transparent text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:focus:ring-blue-900/30 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                          value={server.proxy.http_port}
-                          onChange={(e) => handleUpdateProxy({ http_port: parseInt(e.target.value) || 8080 })}
-                          disabled={server.proxy_running}
-                        />
+                        {server.proxy_running ? (
+                          <span className="text-sm font-mono text-gray-900 dark:text-gray-100">{server.proxy.http_port}</span>
+                        ) : (
+                          <input
+                            type="number"
+                            className="appearance-none w-14 px-2 py-1.5 text-sm font-mono border border-gray-200 dark:border-gray-600 rounded-lg bg-transparent text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:focus:ring-blue-900/30 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            value={server.proxy.http_port}
+                            onChange={(e) => handleUpdateProxy({ http_port: parseInt(e.target.value) || 8080 })}
+                            disabled={server.proxy_running}
+                          />
+                        )}
                       </div>
                     </>
                   )}
-                  <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={server.proxy.mixed_port > 0}
-                      onChange={(e) => handleUpdateProxy({ mixed_port: e.target.checked ? (server.proxy.socks5_port || 1080) : 0 })}
-                      disabled={server.proxy_running}
-                      className="rounded"
-                    />
-                    {t("server.mixed_port")}
-                  </label>
-                  <label className={`inline-flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none ml-auto ${!server.proxy_running ? "opacity-50 pointer-events-none" : ""}`}>
-                    <input
-                      type="checkbox"
-                      checked={systemProxyEnabled}
-                      onChange={(e) => {
-                        if (e.target.checked) handleSetSystemProxy();
-                        else handleClearSystemProxy();
+                  {!server.proxy_running && (
+                    <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={server.proxy.mixed_port > 0}
+                        onChange={(e) => handleUpdateProxy({ mixed_port: e.target.checked ? (server.proxy.socks5_port || 1080) : 0 })}
+                        disabled={server.proxy_running}
+                        className="rounded"
+                      />
+                      {t("server.mixed_port")}
+                    </label>
+                  )}
+                  <div className={`inline-flex items-center gap-2 ml-auto ${!server.proxy_running ? "opacity-50 pointer-events-none" : ""}`}>
+                    <span className="text-xs text-gray-500 font-medium">{t("server.system_proxy")}</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={systemProxyEnabled}
+                      onClick={() => {
+                        if (systemProxyEnabled) handleClearSystemProxy();
+                        else handleSetSystemProxy();
                       }}
                       disabled={!server.proxy_running}
-                      className="rounded"
-                    />
-                    {t("server.set_system_proxy")}
-                  </label>
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 ${
+                        systemProxyEnabled ? "bg-blue-500" : "bg-gray-200 dark:bg-gray-600"
+                      } ${!server.proxy_running ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                    >
+                      <span
+                        className="inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200"
+                        style={{ transform: systemProxyEnabled ? "translateX(22px)" : "translateX(2px)" }}
+                      />
+                    </button>
+                  </div>
                 </div>
               </div>
 
