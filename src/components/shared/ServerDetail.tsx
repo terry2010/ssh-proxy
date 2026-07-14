@@ -412,6 +412,42 @@ export function ServerDetail() {
   const handleToggleProxy = async () => {
     if (!server.id) return;
     const newEnabled = !server.proxy_running;
+
+    // If starting proxy and not connected, auto-connect first
+    if (newEnabled && !isConnected) {
+      setConnecting(true);
+      updateServerStatus(server.id, "connecting");
+      try {
+        await ipcInvoke("ipc_connect_server", { serverId: server.id });
+        updateServerStatus(server.id, "connected", server.last_known_ip || undefined);
+      } catch (e: any) {
+        const errMsg = formatIpcError(e);
+        updateServerStatus(server.id, "offline");
+        useLogStore.getState().addEntry({
+          id: `conn-err-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          timestamp: new Date().toISOString(),
+          server_id: server.id,
+          level: "error",
+          category: "Connection",
+          message: `Connection failed: ${errMsg}`,
+          execution_id: null,
+          command: null,
+          exit_code: null,
+          stdout: null,
+          stderr: null,
+        });
+        toast.error(t("server.connect_failed"), { description: errMsg });
+        if (e instanceof IpcErrorImpl && e.code === "CredentialNotFound") {
+          window.dispatchEvent(
+            new CustomEvent("edit-server", { detail: { serverId: server.id } })
+          );
+        }
+        return;
+      } finally {
+        setConnecting(false);
+      }
+    }
+
     try {
       await ipcInvoke("ipc_toggle_proxy", {
         serverId: server.id,
@@ -645,15 +681,7 @@ export function ServerDetail() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  {!isConnected ? (
-                    <button
-                      className="px-5 py-2.5 text-sm rounded-lg bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50 font-medium shadow-sm transition-colors"
-                      onClick={handleConnect}
-                      disabled={connecting}
-                    >
-                      {connecting ? t("server.status.connecting") : t("server.connect")}
-                    </button>
-                  ) : (
+                  {isConnected && (
                     <button
                       className="px-5 py-2.5 text-sm rounded-lg bg-red-500 text-white hover:bg-red-600 font-medium shadow-sm transition-colors"
                       onClick={handleDisconnect}
@@ -666,7 +694,7 @@ export function ServerDetail() {
                     onClick={handleOpenTerminal}
                     disabled={connecting}
                   >
-                    {connecting ? t("server.status.connecting") : t("server.login_server")}
+                    {connecting ? t("server.status.connecting") : (termTabs.length === 0 ? t("server.connect_terminal") : t("server.login_server"))}
                   </button>
                 </div>
               </div>
@@ -707,7 +735,7 @@ export function ServerDetail() {
                       : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600"
                   }`}
                   onClick={handleToggleProxy}
-                  disabled={!isConnected}
+                  disabled={connecting && !server.proxy_running}
                 >
                   {server.proxy_running ? t("server.stop_proxy") : t("server.start_proxy")}
                 </button>
