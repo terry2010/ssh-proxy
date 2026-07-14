@@ -2,12 +2,12 @@
 // Connects to a backend PTY session via IPC
 // Supports ZMODEM (rz/sz) file transfers via zmodem.js-ex
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { writeFile } from "@tauri-apps/plugin-fs";
+import { open, remove, copyFile, BaseDirectory, type FileHandle } from "@tauri-apps/plugin-fs";
 import { ipcInvoke } from "@/hooks/useIpc";
 import { Sentry as ZmodemSentry, type ZmodemDetection, type ZmodemSession, type ZmodemTransfer } from "zmodem.js-ex";
 import * as ZmodemLib from "zmodem.js-ex";
@@ -292,39 +292,21 @@ function stripLeadingZmodemHeaders(octets: number[]): number[] {
   return octets.slice(i);
 }
 
-// Save received file payloads to disk via Tauri save dialog
-async function saveToDisk(payloads: Uint8Array[], filename: string) {
-  console.log("[ZMODEM] saveToDisk called, payloads:", payloads.length, "filename:", filename);
-  const path = await saveDialog({ defaultPath: filename });
-  if (!path) {
-    console.log("[ZMODEM] save dialog cancelled");
-    return;
-  }
-  console.log("[ZMODEM] save path:", path);
-  // Concatenate payloads into a single Uint8Array
-  const totalLen = payloads.reduce((s, p) => s + p.length, 0);
-  console.log("[ZMODEM] total bytes to write:", totalLen);
-  if (totalLen === 0) {
-    console.error("[ZMODEM] no data received!");
-    return;
-  }
-  const buf = new Uint8Array(totalLen);
-  let off = 0;
-  for (const p of payloads) { buf.set(p, off); off += p.length; }
-  try {
-    await writeFile(path, buf);
-    console.log("[ZMODEM] file written successfully:", path);
-  } catch (e) {
-    console.error("[ZMODEM] writeFile failed:", e);
-  }
-}
-
 export function TerminalView({ sessionId, serverId, active, initialOutput }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
+
+  const [zmodemProgress, setZmodemProgress] = useState<{
+    active: boolean;
+    isUpload: boolean;
+    filename: string;
+    received: number;
+    total: number;
+    percent: number;
+  } | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -400,23 +382,133 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
     };
 
     // sz: remote is SENDING files to us (session.type === "receive").
-    // Accept each file offer and save to disk via Tauri save dialog.
-    // accept() must be called synchronously to set up the ZDATA handler
-    // before ZDATA arrives; the save dialog runs in parallel.
+    // Stream each file chunk to a temp file as it arrives (so progress is
+    // written to disk in real time) and then copy the temp file to the user
+    // chosen path once the transfer completes.
     function handleSzDownload(session: ZmodemSession) {
-      session.on("offer", (xfer: ZmodemTransfer) => {
+      session.on("offer", async (xfer: ZmodemTransfer) => {
         const details = xfer.get_details();
-        // Start receiving immediately (sets ZDATA handler, sends ZRPOS)
-        const acceptPromise = xfer.accept();
-        // Ask user where to save — runs in parallel with data reception
-        acceptPromise.then((payloads: Uint8Array[]) => {
-          saveToDisk(payloads, details.name).catch((e: unknown) => {
-            console.error("[ZMODEM] save failed:", e);
-          });
-        }).catch((e: unknown) => {
-          console.error("[ZMODEM] accept failed:", e);
-          xfer.skip();
+
+        // Use a temporary file in the system temp directory. We stream each
+        // received payload here while the user is still picking the save path.
+        const safeName = details.name.replace(/[\\/]/g, "_");
+        const tempName = `zmodem-${Date.now()}-${safeName}`;
+        const writeQueue: Uint8Array[] = [];
+        let fileHandle: FileHandle | null = null;
+        let writing = false;
+        let receivedBytes = 0;
+        let lastProgressPercent = -1;
+        let lastProgressReceived = 0;
+
+        const writeQueueDrain = async () => {
+          if (writing || !fileHandle) return;
+          writing = true;
+          while (writeQueue.length) {
+            const data = writeQueue.shift()!;
+            await fileHandle.write(data);
+          }
+          writing = false;
+        };
+
+        // Open the temp file asynchronously. The first payloads may arrive
+        // before the file is open, so we queue them and drain once ready.
+        open(tempName, {
+          write: true,
+          create: true,
+          append: true,
+          baseDir: BaseDirectory.Temp,
+        })
+          .then((fh) => {
+            fileHandle = fh;
+            writeQueueDrain();
+          })
+          .catch((e) => console.error("[ZMODEM] open temp file failed:", e));
+
+        // Show progress UI immediately.
+        setZmodemProgress({
+          active: true,
+          isUpload: false,
+          filename: details.name,
+          received: 0,
+          total: details.size || 0,
+          percent: 0,
         });
+
+        // accept() must be called synchronously to set up the ZDATA handler.
+        // Pass an on_input callback so payloads are written to disk as they
+        // arrive, instead of being spooled in memory until the end.
+        const acceptPromise = (xfer as any).accept({
+          on_input: (payload: number[]) => {
+            receivedBytes += payload.length;
+            writeQueue.push(new Uint8Array(payload));
+            writeQueueDrain();
+
+            const totalSize = details.size;
+            if (totalSize && totalSize > 0) {
+              const percent = Math.floor((receivedBytes / totalSize) * 100);
+              if (percent > lastProgressPercent) {
+                lastProgressPercent = percent;
+                setZmodemProgress({
+                  active: true,
+                  isUpload: false,
+                  filename: details.name,
+                  received: receivedBytes,
+                  total: totalSize,
+                  percent,
+                });
+                if (percent % 5 === 0) {
+                  console.log(`[ZMODEM] download progress: ${percent}% (${receivedBytes}/${totalSize})`);
+                }
+              }
+            } else {
+              // sz didn't send total file size — throttle UI updates to ~5% growth
+              const shouldUpdate = lastProgressReceived === 0 || receivedBytes >= lastProgressReceived * 1.05;
+              if (shouldUpdate) {
+                lastProgressReceived = receivedBytes;
+                setZmodemProgress({
+                  active: true,
+                  isUpload: false,
+                  filename: details.name,
+                  received: receivedBytes,
+                  total: 0,
+                  percent: 0,
+                });
+                console.log(`[ZMODEM] download progress: ${receivedBytes} bytes`);
+              }
+            }
+          },
+        });
+
+        // Show the save dialog in parallel. The transfer is already writing
+        // chunks to the temp file.
+        const path = await saveDialog({ defaultPath: details.name });
+        if (!path) {
+          console.log("[ZMODEM] save dialog cancelled, skipping file");
+          try { await (fileHandle as any)?.close(); } catch (_) {}
+          try { await remove(tempName, { baseDir: BaseDirectory.Temp }); } catch (_) {}
+          setZmodemProgress(null);
+          xfer.skip();
+          return;
+        }
+
+        try {
+          await acceptPromise;
+          await writeQueueDrain();
+          await (fileHandle as any)?.close();
+          fileHandle = null;
+
+          await copyFile(tempName, path, { fromPathBaseDir: BaseDirectory.Temp });
+          console.log("[ZMODEM] file saved to:", path);
+        } catch (e: unknown) {
+          console.error("[ZMODEM] accept failed:", e);
+          try { await (fileHandle as any)?.close(); } catch (_) {}
+          try { await remove(tempName, { baseDir: BaseDirectory.Temp }); } catch (_) {}
+          setZmodemProgress(null);
+          xfer.skip();
+        } finally {
+          try { await remove(tempName, { baseDir: BaseDirectory.Temp }); } catch (_) {}
+          setZmodemProgress(null);
+        }
       });
       session.on("session_end", () => {
         cleanupSession(session);
@@ -442,6 +534,7 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
       zmodemSession = null;
       zmodemCooldownUntil = Date.now() + 10000;
       clearSentryState();
+      setZmodemProgress(null);
     };
 
     // rz: remote is RECEIVING files from us (session.type === "send").
@@ -715,10 +808,41 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
     } catch { /* ignore */ }
   }, [active]);
 
+  const formatBytes = (bytes: number) => {
+    if (bytes === 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
+  };
+
   return (
-    <div
-      ref={containerRef}
-      className="w-full h-full bg-[#1e1e2e] overflow-hidden"
-    />
+    <div className="relative w-full h-full bg-[#1e1e2e] overflow-hidden">
+      <div
+        ref={containerRef}
+        className="w-full h-full"
+      />
+      {zmodemProgress && zmodemProgress.active && (
+        <div className="absolute top-4 left-4 right-4 z-50 bg-slate-800/95 border border-slate-600 text-white p-3 rounded-lg shadow-lg">
+          <div className="flex justify-between text-sm mb-2">
+            <span className="truncate pr-4">
+              {zmodemProgress.isUpload ? "上传" : "下载"}: {zmodemProgress.filename}
+            </span>
+            <span className="shrink-0 font-mono">
+              {zmodemProgress.percent}%
+            </span>
+          </div>
+          <div className="w-full bg-slate-700 h-2 rounded-full overflow-hidden">
+            <div
+              className="bg-blue-500 h-2 rounded-full transition-all duration-100 ease-out"
+              style={{ width: `${zmodemProgress.percent}%` }}
+            />
+          </div>
+          <div className="text-xs text-slate-400 mt-2 font-mono">
+            {formatBytes(zmodemProgress.received)} / {formatBytes(zmodemProgress.total)}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

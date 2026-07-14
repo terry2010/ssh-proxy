@@ -132,6 +132,8 @@
     "test": "Test Proxy",
     "on": "Proxy On",
     "off": "Proxy Off",
+    "not_connected": "Not Connected",
+    "started": "Started",
     "toggle": "Toggle proxy"
   },
   "trigger": {
