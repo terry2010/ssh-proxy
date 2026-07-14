@@ -36,6 +36,8 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_network::init())
         .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .on_window_event(|window, event| {
             // Graceful shutdown on window close (FP-5.4)
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
