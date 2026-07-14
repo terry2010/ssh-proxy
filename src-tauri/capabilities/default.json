@@ -39,6 +39,23 @@
     "os:allow-family",
     "os:allow-arch",
     "os:allow-hostname",
-    "os:allow-locale"
+    "os:allow-locale",
+    "dialog:allow-save",
+    "dialog:allow-open",
+    "fs:allow-write-file",
+    "fs:allow-read-file",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        { "path": "$HOME" },
+        { "path": "$HOME/**" },
+        { "path": "$DOWNLOAD" },
+        { "path": "$DOWNLOAD/**" },
+        { "path": "$DOCUMENT" },
+        { "path": "$DOCUMENT/**" },
+        { "path": "$DESKTOP" },
+        { "path": "$DESKTOP/**" }
+      ]
+    }
   ]
 }

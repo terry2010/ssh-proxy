@@ -4,6 +4,7 @@
 //! Each session has a unique ID; output is streamed via the event forwarder.
 
 use crate::server::EventForwarder;
+use base64::Engine;
 use russh::client;
 use russh::ChannelMsg;
 use std::collections::HashMap;
@@ -73,9 +74,9 @@ impl TerminalManager {
         // the frontend can write it directly to the terminal — avoiding a
         // race condition where the read_task emits "terminal:output" events
         // before the frontend has registered its event listener.
-        let mut initial_output = String::from_utf8_lossy(&first_output).into_owned();
-        if !initial_output.is_empty() {
-            tracing::info!("terminal initial data from open: {} bytes for session {}", initial_output.len(), sid);
+        let mut initial_output_bytes = first_output.clone();
+        if !initial_output_bytes.is_empty() {
+            tracing::info!("terminal initial data from open: {} bytes for session {}", initial_output_bytes.len(), sid);
         }
         let collect_deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(800);
         loop {
@@ -84,10 +85,10 @@ impl TerminalManager {
             let remaining = collect_deadline - now;
             match tokio::time::timeout(remaining, read_half.wait()).await {
                 Ok(Some(ChannelMsg::Data { ref data })) => {
-                    initial_output.push_str(&String::from_utf8_lossy(data));
+                    initial_output_bytes.extend_from_slice(data);
                 }
                 Ok(Some(ChannelMsg::ExtendedData { ref data, .. })) => {
-                    initial_output.push_str(&String::from_utf8_lossy(data));
+                    initial_output_bytes.extend_from_slice(data);
                 }
                 Ok(Some(ChannelMsg::Success)) => {
                     // Shell request confirmed — keep reading for MOTD data
@@ -104,8 +105,10 @@ impl TerminalManager {
                 }
             }
         }
-        if !initial_output.is_empty() {
-            tracing::info!("terminal collected initial output: {} bytes for session {}", initial_output.len(), sid);
+        // Encode initial output as base64 so binary data (e.g. ZMODEM) is preserved
+        let initial_output = base64::engine::general_purpose::STANDARD.encode(&initial_output_bytes);
+        if !initial_output_bytes.is_empty() {
+            tracing::info!("terminal collected initial output: {} bytes (base64 len={}) for session {}", initial_output_bytes.len(), initial_output.len(), sid);
         }
 
         let read_sid = sid.clone();
@@ -117,13 +120,13 @@ impl TerminalManager {
                 tracing::info!("channel.wait() returned {:?} for session {}", msg, read_sid);
                 match msg {
                     Some(ChannelMsg::Data { ref data }) => {
-                        let output = String::from_utf8_lossy(data).into_owned();
-                        tracing::info!("terminal data len={} for session {}", output.len(), read_sid);
+                        let output = base64::engine::general_purpose::STANDARD.encode(data);
+                        tracing::info!("terminal data len={} (base64={}) for session {}", data.len(), output.len(), read_sid);
                         forward_terminal_output(&read_fwd, &read_sid, &output, false);
                     }
                     Some(ChannelMsg::ExtendedData { ref data, .. }) => {
-                        let output = String::from_utf8_lossy(data).into_owned();
-                        tracing::info!("terminal ext data len={} for session {}", output.len(), read_sid);
+                        let output = base64::engine::general_purpose::STANDARD.encode(data);
+                        tracing::info!("terminal ext data len={} (base64={}) for session {}", data.len(), output.len(), read_sid);
                         forward_terminal_output(&read_fwd, &read_sid, &output, true);
                     }
                     Some(ChannelMsg::Success) => {
@@ -209,10 +212,14 @@ impl TerminalManager {
         let session = sessions
             .get(session_id)
             .ok_or_else(|| format!("terminal session not found: {}", session_id))?;
-        tracing::info!("TerminalManager::input sending to session {}", session_id);
+        // Data is base64-encoded to support binary input (e.g. ZMODEM file transfers)
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|e| format!("failed to decode base64 input: {}", e))?;
+        tracing::info!("TerminalManager::input sending {} bytes to session {}", decoded.len(), session_id);
         session
             .cmd_tx
-            .send(TerminalCmd::Input(data.as_bytes().to_vec()))
+            .send(TerminalCmd::Input(decoded))
             .map_err(|e| format!("failed to send terminal input: {}", e))
     }
 
