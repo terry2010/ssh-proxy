@@ -2,8 +2,8 @@
 name = "vps-guard-app"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
-authors = ["VPS Guard Contributors"]
+license = "Apache-2.0"
+authors = ["TermFast Contributors"]
 
 [lib]
 name = "vps_guard_app_lib"
