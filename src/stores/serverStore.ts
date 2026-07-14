@@ -15,6 +15,17 @@ export interface ServerState extends ServerConfig {
   active_channels: number;
   bytes_in: number;
   bytes_out: number;
+  /** SSH auth banner (RFC4252 §5.4) — welcome message from server */
+  auth_banner: string | null;
+}
+
+export interface TerminalTab {
+  id: string;
+  sessionId: string;
+  label: string;
+  defaultLabel: string;
+  initialOutput: string;
+  disconnected: boolean;
 }
 
 interface ServerStore {
@@ -22,6 +33,8 @@ interface ServerStore {
   selected_server_id: string | null;
   active_tabs: Record<string, string>;
   loading: boolean;
+  terminal_tabs_by_server: Record<string, TerminalTab[]>;
+  active_terminal_tab_by_server: Record<string, string>;
 
   setServers: (servers: ServerState[]) => void;
   updateServerStatus: (serverId: string, status: ServerStatus, ip?: string, clientIp?: string | null) => void;
@@ -32,6 +45,14 @@ interface ServerStore {
   removeServer: (serverId: string) => void;
   setLoading: (loading: boolean) => void;
   setProxyStatus: (serverId: string, running: boolean) => void;
+  setAuthBanner: (serverId: string, banner: string | null) => void;
+  addTerminalTab: (serverId: string, tab: TerminalTab) => void;
+  removeTerminalTab: (serverId: string, tabId: string) => void;
+  setTerminalTabsForServer: (serverId: string, tabs: TerminalTab[]) => void;
+  setActiveTerminalTab: (serverId: string, tabId: string) => void;
+  renameTerminalTab: (serverId: string, tabId: string, label: string) => void;
+  setTerminalTabDisconnected: (serverId: string, sessionId: string) => void;
+  clearTerminalTabs: (serverId: string) => void;
 }
 
 export const useServerStore = create<ServerStore>((set, get) => ({
@@ -39,6 +60,8 @@ export const useServerStore = create<ServerStore>((set, get) => ({
   selected_server_id: null,
   active_tabs: {},
   loading: false,
+  terminal_tabs_by_server: {},
+  active_terminal_tab_by_server: {},
 
   setServers: (servers) => set({ servers }),
 
@@ -97,4 +120,86 @@ export const useServerStore = create<ServerStore>((set, get) => ({
         s.id === serverId ? { ...s, proxy_running: running } : s
       ),
     })),
+
+  setAuthBanner: (serverId, banner) =>
+    set((state) => ({
+      servers: state.servers.map((s) =>
+        s.id === serverId ? { ...s, auth_banner: banner } : s
+      ),
+    })),
+
+  addTerminalTab: (serverId, tab) =>
+    set((state) => ({
+      terminal_tabs_by_server: {
+        ...state.terminal_tabs_by_server,
+        [serverId]: [...(state.terminal_tabs_by_server[serverId] || []), tab],
+      },
+      active_terminal_tab_by_server: {
+        ...state.active_terminal_tab_by_server,
+        [serverId]: tab.id,
+      },
+    })),
+
+  removeTerminalTab: (serverId, tabId) =>
+    set((state) => {
+      const current = state.terminal_tabs_by_server[serverId] || [];
+      const nextTabs = current.filter((t) => t.id !== tabId);
+      const next = { ...state.terminal_tabs_by_server, [serverId]: nextTabs };
+      const wasActive = state.active_terminal_tab_by_server[serverId] === tabId;
+      return {
+        terminal_tabs_by_server: next,
+        active_terminal_tab_by_server: wasActive
+          ? { ...state.active_terminal_tab_by_server, [serverId]: "overview" }
+          : state.active_terminal_tab_by_server,
+      };
+    }),
+
+  setTerminalTabsForServer: (serverId, tabs) =>
+    set((state) => ({
+      terminal_tabs_by_server: { ...state.terminal_tabs_by_server, [serverId]: tabs },
+    })),
+
+  setActiveTerminalTab: (serverId, tabId) =>
+    set((state) => ({
+      active_terminal_tab_by_server: {
+        ...state.active_terminal_tab_by_server,
+        [serverId]: tabId,
+      },
+    })),
+
+  renameTerminalTab: (serverId, tabId, label) =>
+    set((state) => {
+      const current = state.terminal_tabs_by_server[serverId] || [];
+      return {
+        terminal_tabs_by_server: {
+          ...state.terminal_tabs_by_server,
+          [serverId]: current.map((t) => (t.id === tabId ? { ...t, label } : t)),
+        },
+      };
+    }),
+
+  setTerminalTabDisconnected: (serverId, sessionId) =>
+    set((state) => {
+      const current = state.terminal_tabs_by_server[serverId] || [];
+      return {
+        terminal_tabs_by_server: {
+          ...state.terminal_tabs_by_server,
+          [serverId]: current.map((t) =>
+            t.sessionId === sessionId ? { ...t, disconnected: true } : t
+          ),
+        },
+      };
+    }),
+
+  clearTerminalTabs: (serverId) =>
+    set((state) => {
+      const nextTabs = { ...state.terminal_tabs_by_server };
+      delete nextTabs[serverId];
+      const nextActive = { ...state.active_terminal_tab_by_server };
+      delete nextActive[serverId];
+      return {
+        terminal_tabs_by_server: nextTabs,
+        active_terminal_tab_by_server: nextActive,
+      };
+    }),
 }));

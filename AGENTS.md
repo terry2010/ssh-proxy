@@ -1,16 +1,39 @@
 # AI 助手开发规范
 
-## 严禁使用 subagent（绝对规则）
+## Subagent 使用规则（仅允许 reviewer）
 
-**绝对禁止使用 `run_subagent` 工具！**
+**只允许 spawn `reviewer` 这一个只读 subagent profile，禁止其他所有 subagent。**
 
-使用 subagent 会导致：
-- GUI OOM 崩溃（内存溢出）
-- 任务失败
-- 用户界面卡死
+### 允许
 
-任何情况下都不要调用 `run_subagent`，无论是 `is_background=true` 还是 `is_background=false`。
-所有任务必须由主 agent 直接完成，不得委派给 subagent。
+- 使用 `run_subagent` 且 profile 为 `reviewer`（定义在 `.devin/agents/reviewer/AGENT.md`）
+- reviewer 是只读 agent：只能 `read/grep/glob/exec`，禁止 `write/edit`
+- 用途：每个功能点开发完成后，spawn reviewer 对改动做独立评审
+
+### 禁止
+
+- 禁止使用内置的 `subagent_explore` 或 `subagent_general` profile
+- 禁止 spawn 任何其他自定义 subagent profile
+- 禁止用 subagent 做实现工作（写代码、改代码一律由主 agent 直接完成）
+- 禁止嵌套 subagent（reviewer 不能再 spawn subagent）
+
+### 为什么要限制
+
+历史经验表明，多 subagent 并发会导致 GUI OOM（内存溢出）、界面卡死。
+只保留一个只读、工具受限的 reviewer，既能获得独立评审（防偷工），
+又把 OOM 风险压到最低：reviewer 只用 auto-approve 的只读工具，
+不触发权限弹窗，不并发，不嵌套。
+
+### 何时 spawn reviewer
+
+每个功能点完成开发 + 单元测试后，进入"对比文档确认"环节时，
+主 agent 必须 spawn reviewer，在 task prompt 里包含：
+1. 本次改动涉及的文件列表
+2. design doc 中该功能点的验收标准（逐条）
+3. 要求 reviewer 逐条核对并输出带证据的结论
+
+reviewer 返回报告后，主 agent 根据报告决定是否进入下一功能点。
+未通过项必须补完后重新 spawn reviewer 复审。
 
 ## 文件写入规范（防止 GUI OOM）
 

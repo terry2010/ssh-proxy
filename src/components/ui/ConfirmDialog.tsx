@@ -87,7 +87,7 @@ export function ConfirmDialog({
       {level === "high" && confirmName && (
         <div className="mb-4">
           <p className="text-sm mb-2 text-gray-600 dark:text-gray-400">
-            {t("common.delete")} — {t("common.yes")} "{confirmName}"
+            {t("common.type_to_confirm", { name: confirmName })}
           </p>
           <input
             type="text"

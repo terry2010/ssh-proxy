@@ -7,8 +7,10 @@ pub mod lock;
 pub mod frame;
 pub mod server;
 pub mod handler;
+pub mod terminal;
 
 pub use proto::{Action, EventType, Request, Response, IpcError};
 pub use lock::{DaemonLock, find_daemon_socket};
 pub use server::{DaemonServer, DaemonState, ClientHandle};
 pub use handler::handle_request;
+pub use terminal::TerminalManager;

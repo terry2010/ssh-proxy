@@ -4,6 +4,7 @@
 //! Platform-specific storage (keychain etc.) is in credential crate.
 
 use super::config::Config;
+use super::migration::backup_corrupt_config;
 use crate::error::{Error, ErrorCode, IpcError, Result};
 use std::path::{Path, PathBuf};
 
@@ -73,6 +74,10 @@ impl ConfigStorage for FileConfigStorage {
 
         let config: Config = serde_json::from_str(&content).map_err(|e| {
             tracing::error!("config parse error: {}", e);
+            // Back up the corrupt file before returning the error so the
+            // user's data is not lost when a caller falls back to defaults
+            // and then saves (which would overwrite the original file).
+            let _ = backup_corrupt_config(&self.config_path);
             Error::Ipc(IpcError::new(
                 ErrorCode::ConfigCorrupt,
                 format!("config JSON parse error: {}", e),

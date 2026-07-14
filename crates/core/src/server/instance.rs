@@ -135,6 +135,13 @@ impl ServerInstance {
         *self.client_ip.lock().await = ip;
     }
 
+    /// Get the SSH auth banner received during the most recent connection
+    /// (RFC4252 §5.4). This is the welcome message sent by the server during
+    /// authentication, before the shell starts.
+    pub async fn auth_banner(&self) -> Option<String> {
+        self.ssh_client.auth_banner().await
+    }
+
     /// Set the runtime state manager for IP persistence (FP-1.3b)
     pub async fn set_runtime_state(&self, rs: Arc<crate::config::RuntimeStateManager>) {
         *self.runtime_state.lock().await = Some(rs);

@@ -84,33 +84,44 @@ export function TriggerList({ serverId }: { serverId: string }) {
   }
 
   return (
-    <div className="space-y-2 p-4">
-      <div className="flex justify-between items-center mb-2">
-        <span className="text-sm text-gray-500">{t("trigger.title")}</span>
+    <div>
+      <div className="flex justify-between items-center mb-3">
+        <span className="text-sm text-gray-500 dark:text-gray-400">
+          {triggers.length > 0 ? t("trigger.title") : t("trigger.title")}
+        </span>
         <button
-          className="text-xs px-2 py-1 rounded bg-blue-500 text-white hover:bg-blue-600"
+          className="text-xs px-3 py-1.5 rounded-lg bg-blue-500 text-white hover:bg-blue-600 font-medium transition-colors shadow-sm"
           onClick={() => setEditingTrigger(null)}
         >
           + {t("trigger.add")}
         </button>
       </div>
       {triggers.length === 0 ? (
-        <div className="p-4 text-center text-sm text-gray-500">
-          {t("trigger.fire")}
+        <div className="py-8 text-center">
+          <div className="w-10 h-10 rounded-full bg-gray-100 dark:bg-gray-700/50 flex items-center justify-center text-gray-400 mx-auto mb-3">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="13 17 18 12 13 7" />
+              <polyline points="6 17 11 12 6 7" />
+            </svg>
+          </div>
+          <div className="text-sm text-gray-500 dark:text-gray-400 mb-2">{t("trigger.empty_title")}</div>
+          <div className="text-xs text-gray-400 dark:text-gray-500 max-w-md mx-auto leading-relaxed">{t("trigger.empty_description")}</div>
         </div>
       ) : (
-        triggers.map((trigger) => (
-          <TriggerCard
-            key={trigger.id}
-            trigger={trigger}
-            executing={Object.values(executing).find((e) => e.trigger_id === trigger.id)}
-            serverId={serverId}
-            triggerType={trigger.trigger_type || templates.find(tpl => tpl.id === trigger.template_id)?.type || "ManualFire"}
-            builtIn={templates.find(tpl => tpl.id === trigger.template_id)?.built_in || false}
-            onEdit={() => setEditingTrigger(trigger)}
-            connected={serverStatus === "connected"}
-          />
-        ))
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+          {triggers.map((trigger) => (
+            <TriggerCard
+              key={trigger.id}
+              trigger={trigger}
+              executing={Object.values(executing).find((e) => e.trigger_id === trigger.id)}
+              serverId={serverId}
+              triggerType={trigger.trigger_type || templates.find(tpl => tpl.id === trigger.template_id)?.type || "ManualFire"}
+              builtIn={templates.find(tpl => tpl.id === trigger.template_id)?.built_in || false}
+              onEdit={() => setEditingTrigger(trigger)}
+              connected={serverStatus === "connected"}
+            />
+          ))}
+        </div>
       )}
     </div>
   );
@@ -186,24 +197,48 @@ function TriggerCard({
   };
 
   return (
-    <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
-      <div className="flex items-start justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <span className={`text-xs px-2 py-0.5 rounded ${EVENT_TYPE_COLORS[triggerType]}`}>
-            {t(`trigger.event_types.${triggerType}`)}
-          </span>
-          <span className="text-sm font-medium">{trigger.name}</span>
-          {builtIn && (
-            <span className="text-xs text-gray-400">{t("trigger.built_in")}</span>
-          )}
+    <div className="border-b border-gray-100 dark:border-gray-700/60 last:border-0 hover:bg-gray-50/50 dark:hover:bg-gray-700/20 transition-colors">
+      <div className="flex items-center justify-between gap-4 px-4 py-3.5">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap mb-1">
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${EVENT_TYPE_COLORS[triggerType]}`}>
+              {t(`trigger.event_types.${triggerType}`)}
+            </span>
+            <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">{trigger.name}</span>
+            {builtIn && (
+              <span className="text-[10px] text-gray-400">{t("trigger.built_in")}</span>
+            )}
+          </div>
+          <div className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">
+            {commandSummary}
+          </div>
+        </div>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <button
+            className="text-xs px-2.5 py-1.5 rounded-lg bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors"
+            onClick={handleFire}
+            disabled={!connected}
+            title={!connected ? t("server.connect_first") : undefined}
+          >
+            ▶ {t("trigger.fire")}
+          </button>
+          <button
+            className="text-xs px-2.5 py-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors"
+            onClick={onEdit}
+          >
+            {t("common.edit")}
+          </button>
+          <button
+            className="text-xs px-2.5 py-1.5 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"
+            onClick={() => setConfirmDelete(true)}
+          >
+            {t("common.delete")}
+          </button>
         </div>
       </div>
-      <div className="text-xs text-gray-500 dark:text-gray-400 font-mono mb-2 truncate">
-        {commandSummary}
-      </div>
       {executing && (
-        <div className="mb-2">
-          <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+        <div className="px-4 pb-3.5">
+          <div className="h-1 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden mb-2">
             <div
               className={`h-full transition-all ${executing.success === false ? "bg-red-500" : "bg-blue-500"}`}
               style={{
@@ -211,7 +246,7 @@ function TriggerCard({
               }}
             />
           </div>
-          <div className="text-xs text-gray-500 mt-1 flex items-center justify-between">
+          <div className="text-xs text-gray-500 flex items-center justify-between mb-2">
             <span>{executing.executed_commands}/{executing.total_commands}</span>
             <div className="flex items-center gap-2">
               {executing.success === true && (
@@ -230,7 +265,7 @@ function TriggerCard({
             </div>
           </div>
           {executing.results && executing.results.length > 0 && (
-            <div className="mt-2 space-y-1 max-h-40 overflow-y-auto bg-gray-50 dark:bg-gray-900 rounded p-2 font-mono text-xs">
+            <div className="mt-2 space-y-1 max-h-40 overflow-y-auto bg-gray-50 dark:bg-gray-900 rounded-lg p-2 font-mono text-xs">
               {executing.results.map((r, i) => (
                 <div key={i}>
                   <div className="text-gray-600 dark:text-gray-400">
@@ -248,28 +283,6 @@ function TriggerCard({
           )}
         </div>
       )}
-      <div className="flex gap-2">
-        <button
-          className="text-xs px-2 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed"
-          onClick={handleFire}
-          disabled={!connected}
-          title={!connected ? t("server.connect_first") : undefined}
-        >
-          ▶ {t("trigger.fire")}
-        </button>
-        <button
-          className="text-xs px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800"
-          onClick={onEdit}
-        >
-          {t("common.edit")}
-        </button>
-        <button
-          className="text-xs px-2 py-1 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30"
-          onClick={() => setConfirmDelete(true)}
-        >
-          {t("common.delete")}
-        </button>
-      </div>
       {confirmDelete && (
         <ConfirmDialog
           level="medium"
