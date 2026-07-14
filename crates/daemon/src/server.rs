@@ -33,6 +33,8 @@ pub struct DaemonState {
     event_forwarder: Arc<std::sync::Mutex<Option<EventForwarder>>>,
     /// Runtime state manager for last_known_ip persistence (FP-1.3b)
     pub runtime_state: Arc<vps_guard_core::config::RuntimeStateManager>,
+    /// Terminal session manager — interactive SSH terminals
+    pub terminal_manager: Arc<crate::terminal::TerminalManager>,
 }
 
 /// A connected client
@@ -65,6 +67,8 @@ impl DaemonState {
         credential_store: Arc<dyn vps_guard_credential::CredentialStore>,
         proxy_adapter: Arc<dyn vps_guard_core::platform::SystemProxyAdapter>,
     ) -> Self {
+        let event_forwarder: Arc<std::sync::Mutex<Option<EventForwarder>>> =
+            Arc::new(std::sync::Mutex::new(None));
         Self {
             server_manager: Arc::new(vps_guard_core::server::ServerManager::new()),
             log_buffer: Arc::new(vps_guard_core::log::LogBuffer::new(10000)),
@@ -73,7 +77,8 @@ impl DaemonState {
             proxy_adapter,
             clients: Arc::new(Mutex::new(Vec::new())),
             shutdown_tx: Arc::new(tokio::sync::Notify::new()),
-            event_forwarder: Arc::new(std::sync::Mutex::new(None)),
+            event_forwarder: event_forwarder.clone(),
+            terminal_manager: Arc::new(crate::terminal::TerminalManager::new(event_forwarder)),
             runtime_state: Arc::new(
                 vps_guard_core::config::RuntimeStateManager::with_default_path()
                     .unwrap_or_else(|e| {

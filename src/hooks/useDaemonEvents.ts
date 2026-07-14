@@ -31,6 +31,7 @@ export function useDaemonEvents() {
   const addEntry = useLogStore((s) => s.addEntry);
   const updateTriggerExecution = useTriggerStore((s) => s.updateExecution);
   const setProxyStatus = useServerStore((s) => s.setProxyStatus);
+  const setAuthBanner = useServerStore((s) => s.setAuthBanner);
 
   // Reload server list from daemon
   const reloadServers = async () => {
@@ -252,6 +253,13 @@ export function useDaemonEvents() {
     });
     addListener<{ server_id: string }>("trigger:removed", () => {
       reloadServers();
+    });
+
+    // ssh:banner — SSH auth banner (RFC4252 §5.4), the welcome message sent
+    // by the server during authentication. Stored on the server state so the
+    // ServerDetail can display it (like SecureCRT shows on connect).
+    addListener<{ server_id: string; banner: string }>("ssh:banner", (data) => {
+      setAuthBanner(data.server_id, data.banner);
     });
 
     // ssh:hostkey_mismatch (§17.2: triple notification — system notification + tray red + log highlight)

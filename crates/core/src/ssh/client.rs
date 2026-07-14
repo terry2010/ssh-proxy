@@ -58,10 +58,27 @@ pub struct SshHandler {
     /// Callback invoked on hostkey mismatch (§17.2: triple notification)
     /// Parameters: (expected_key, actual_key)
     pub hostkey_mismatch_callback: Option<Arc<dyn Fn(String, String) + Send + Sync>>,
+    /// Auth banner received from the server during authentication (RFC4252 §5.4).
+    /// Captured here so the caller can retrieve it after `connect()` returns.
+    pub auth_banner: Arc<tokio::sync::Mutex<Option<String>>>,
 }
 
 impl client::Handler for SshHandler {
     type Error = russh::Error;
+
+    fn auth_banner(
+        &mut self,
+        banner: &str,
+        _session: &mut client::Session,
+    ) -> impl std::future::Future<Output = std::result::Result<(), Self::Error>> + Send {
+        let banner_store = self.auth_banner.clone();
+        let banner_text = banner.to_string();
+        async move {
+            tracing::info!("received SSH auth banner ({} bytes)", banner_text.len());
+            *banner_store.lock().await = Some(banner_text);
+            Ok(())
+        }
+    }
 
     fn check_server_key(
         &mut self,
@@ -106,6 +123,8 @@ pub struct SshClientHandle {
     config: Mutex<SshClientConfig>,
     handle: Mutex<Option<Arc<client::Handle<SshHandler>>>>,
     state: Mutex<ConnectionState>,
+    /// Auth banner captured during the most recent authentication (RFC4252 §5.4).
+    auth_banner: Arc<tokio::sync::Mutex<Option<String>>>,
 }
 
 impl SshClientHandle {
@@ -115,6 +134,7 @@ impl SshClientHandle {
             config: Mutex::new(config),
             handle: Mutex::new(None),
             state: Mutex::new(ConnectionState::Disconnected),
+            auth_banner: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
@@ -126,6 +146,8 @@ impl SshClientHandle {
     /// Connect to the SSH server with the given auth method
     pub async fn connect(&self, auth: &super::auth::AuthMethod) -> Result<()> {
         self.set_state(ConnectionState::Connecting).await;
+        // Clear any banner from a previous connection attempt
+        *self.auth_banner.lock().await = None;
 
         let config = self.config.lock().await;
         let russh_config = Arc::new(client::Config {
@@ -139,21 +161,61 @@ impl SshClientHandle {
             skip_hostkey_verify: config.skip_hostkey_verify,
             host_key_recorded: Arc::new(tokio::sync::Mutex::new(None)),
             hostkey_mismatch_callback: config.hostkey_mismatch_callback.clone(),
+            auth_banner: self.auth_banner.clone(),
         };
 
         let addr = format!("{}:{}", config.host, config.port);
         let user = config.user.clone();
         drop(config);
 
-        let mut handle = client::connect(russh_config, &addr, handler)
-            .await
-            .map_err(|e| {
+        // Open ONE TCP connection and peek at the first bytes to capture any
+        // pre-banner lines (e.g. "Not allowed at this time") that the server
+        // sends before the SSH protocol identification string (RFC4253 §4.2).
+        // The pre-read bytes + remaining stream are then handed to russh's
+        // connect_stream, so we only make a single TCP connection.
+        //
+        // The old approach called client::connect() and then made a SECOND
+        // TCP connection via read_server_banner() to retrieve the pre-banner.
+        // That double-connection doubled the server's failed connection count,
+        // which could trigger fail2ban / MaxStartups rate limiting and make
+        // the rejection persistent.
+        let (pre_banner, stream) = match tokio::time::timeout(
+            Duration::from_secs(10),
+            connect_and_peek(&addr),
+        ).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => {
                 self.set_state_sync(ConnectionState::Disconnected);
-                Error::Ipc(IpcError::new(
+                return Err(Error::Ipc(IpcError::new(
                     ErrorCode::SshConnectFailed,
                     format!("SSH connect to {} failed: {}", addr, e),
-                ))
-            })?;
+                )));
+            }
+            Err(_) => {
+                self.set_state_sync(ConnectionState::Disconnected);
+                return Err(Error::Ipc(IpcError::new(
+                    ErrorCode::SshConnectFailed,
+                    format!("SSH connect to {} timed out", addr),
+                )));
+            }
+        };
+
+        let mut handle = match client::connect_stream(russh_config, stream, handler).await {
+            Ok(h) => h,
+            Err(e) => {
+                self.set_state_sync(ConnectionState::Disconnected);
+                let base_msg = format!("SSH connect to {} failed: {}", addr, e);
+                let enhanced = if pre_banner.is_empty() {
+                    base_msg
+                } else {
+                    format!("{} (server message: {})", base_msg, pre_banner)
+                };
+                return Err(Error::Ipc(IpcError::new(
+                    ErrorCode::SshConnectFailed,
+                    enhanced,
+                )));
+            }
+        };
 
         // Authenticate
         let auth_ok = super::auth::authenticate(&mut handle, &user, auth)
@@ -248,6 +310,12 @@ impl SshClientHandle {
     pub async fn is_connected(&self) -> bool {
         let guard = self.handle.lock().await;
         guard.as_ref().map(|h| !h.is_closed()).unwrap_or(false)
+    }
+
+    /// Get the auth banner received during the most recent authentication
+    /// (RFC4252 §5.4). Returns None if no banner was sent or if not yet connected.
+    pub async fn auth_banner(&self) -> Option<String> {
+        self.auth_banner.lock().await.clone()
     }
 
     /// Execute a command on the remote server
@@ -348,4 +416,116 @@ mod tests {
         client.disconnect().await.unwrap();
         assert_eq!(client.state().await, ConnectionState::Disconnected);
     }
+}
+
+/// A stream wrapper that first returns pre-read bytes, then reads from the
+/// underlying stream. This lets us peek at the server's pre-banner lines and
+/// then hand the same stream (with those bytes still visible) to russh.
+struct PrefixedStream {
+    /// Bytes already read from the TCP stream (pre-banner + possibly SSH id)
+    prefix: Vec<u8>,
+    /// Position in the prefix buffer
+    prefix_pos: usize,
+    /// The underlying TCP stream
+    inner: tokio::net::TcpStream,
+}
+
+impl tokio::io::AsyncRead for PrefixedStream {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+
+        // First, drain the prefix buffer
+        if this.prefix_pos < this.prefix.len() {
+            let remaining = &this.prefix[this.prefix_pos..];
+            let n = remaining.len().min(buf.remaining());
+            buf.put_slice(&remaining[..n]);
+            this.prefix_pos += n;
+            return std::task::Poll::Ready(Ok(()));
+        }
+
+        // Prefix exhausted — read from the underlying stream
+        std::pin::Pin::new(&mut this.inner).poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for PrefixedStream {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
+
+/// Open a TCP connection to `addr`, read the first chunk of data, and extract
+/// any pre-banner lines (lines that don't start with "SSH-"). Returns the
+/// pre-banner text and a stream that replays the pre-read bytes followed by
+/// the remaining TCP data, so russh can use it via `connect_stream`.
+///
+/// This makes exactly ONE TCP connection — unlike the old `read_server_banner`
+/// which made a second connection just to read the pre-banner.
+async fn connect_and_peek(
+    addr: &str,
+) -> std::io::Result<(String, PrefixedStream)> {
+    use tokio::io::AsyncReadExt;
+
+    let mut stream = tokio::net::TcpStream::connect(addr).await?;
+
+    // Read the first chunk (up to 2KB). The server may send:
+    //   - Pre-banner lines + SSH version (e.g. "Not allowed\r\nSSH-2.0-...")
+    //   - Just pre-banner lines then close (rejection)
+    //   - Just SSH version (normal)
+    let mut buf = vec![0u8; 2048];
+    let n = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf)).await
+        .unwrap_or(Ok(0))?;
+    let data = &buf[..n];
+
+    if data.is_empty() {
+        // Server closed immediately — no pre-banner to extract
+        return Ok((String::new(), PrefixedStream {
+            prefix: Vec::new(),
+            prefix_pos: 0,
+            inner: stream,
+        }));
+    }
+
+    // Extract pre-banner lines (lines before the first "SSH-" line)
+    let text = String::from_utf8_lossy(data);
+    let pre_banner_lines: Vec<&str> = text
+        .lines()
+        .take_while(|line| !line.starts_with("SSH-"))
+        .filter(|line| !line.trim().is_empty())
+        .take(3)
+        .collect();
+
+    let pre_banner = if pre_banner_lines.is_empty() {
+        String::new()
+    } else {
+        pre_banner_lines.join(" | ")
+    };
+
+    Ok((pre_banner, PrefixedStream {
+        prefix: data.to_vec(),
+        prefix_pos: 0,
+        inner: stream,
+    }))
 }

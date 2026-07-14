@@ -6,7 +6,8 @@
 //! Starts NetworkMonitor for offline detection (FP-6.9).
 
 use std::sync::Arc;
-use vps_guard_core::config::{Config, ConfigManager, ConfigStorage, FileConfigStorage};
+use vps_guard_core::config::migration::load_config_with_migration;
+use vps_guard_core::config::{Config, ConfigManager, FileConfigStorage};
 use vps_guard_core::platform::{SystemProxyAdapter, SystemProxyConfig, SetProxyResult};
 use vps_guard_credential::KeychainCredentialStore;
 use vps_guard_daemon::{DaemonServer, DaemonState};
@@ -34,10 +35,24 @@ impl EmbeddedDaemon {
             }
         };
 
-        let config = storage.load().unwrap_or_else(|e| {
-            tracing::warn!("failed to load config, using default: {}", e);
-            Config::default()
-        });
+        // Use load_config_with_migration instead of storage.load() so that a
+        // corrupt config file is backed up (config.json.corrupt.<ts>) before
+        // falling back to defaults. The previous storage.load().unwrap_or_default()
+        // path silently returned an empty Config (servers: []) on any parse error,
+        // and a subsequent save would overwrite the user's real config with the
+        // empty one — permanently destroying all configured servers.
+        let config = match load_config_with_migration(storage.path()) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(
+                    "failed to load config from {}: {} — starting with empty config \
+                     (existing file was backed up if it was corrupt)",
+                    storage.path().display(),
+                    e
+                );
+                Config::default()
+            }
+        };
 
         Self::start_with_config_and_storage(config, storage).await
     }

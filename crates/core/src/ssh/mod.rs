@@ -6,8 +6,10 @@ pub mod client;
 pub mod auth;
 pub mod exec;
 pub mod channel_opener;
+pub mod pty;
 
 pub use client::{SshClientHandle, ConnectionState, SshClientConfig};
 pub use auth::{AuthMethod, generate_keypair, push_public_key};
 pub use exec::{exec, detect_client_ip, ExecResult};
 pub use channel_opener::{ChannelOpener, SshChannelOpener};
+pub use pty::{open_pty_shell, resize_pty};

@@ -75,6 +75,11 @@ pub async fn handle_request(request: &Request, state: &DaemonState) -> Response 
         Action::ConfigureKeyAuth => handle_configure_key_auth(state, &request.params).await,
         Action::SwitchAuthMethod => handle_switch_auth_method(state, &request.params).await,
         Action::DetectFirewall => handle_detect_firewall(state, &request.params).await,
+        // Terminal — interactive SSH shell sessions
+        Action::TerminalOpen => handle_terminal_open(state, &request.params).await,
+        Action::TerminalInput => handle_terminal_input(state, &request.params).await,
+        Action::TerminalClose => handle_terminal_close(state, &request.params).await,
+        Action::TerminalResize => handle_terminal_resize(state, &request.params).await,
     };
 
     match result {
@@ -112,6 +117,7 @@ async fn handle_list_servers(state: &DaemonState) -> HandlerResult {
         let bytes_out = s.bytes_out().await;
         let cfg = &s.config;
         let triggers = s.triggers.lock().await.clone();
+        let auth_banner = s.auth_banner().await;
         server_list.push(serde_json::json!({
             "id": s.id(),
             "name": s.name(),
@@ -163,6 +169,7 @@ async fn handle_list_servers(state: &DaemonState) -> HandlerResult {
             "active_channels": active_clients,
             "bytes_in": bytes_in,
             "bytes_out": bytes_out,
+            "auth_banner": auth_banner,
         }));
     }
     Ok(serde_json::json!({ "servers": server_list }))
@@ -203,6 +210,12 @@ async fn handle_add_server(state: &DaemonState, params: &serde_json::Value) -> H
         return Err(IpcError::new(
             ErrorCode::ProxyPortInUse,
             format!("HTTP port {} is in use", config.proxy.http_port),
+        ));
+    }
+    if config.proxy.mixed_port > 0 && state.server_manager.is_mixed_port_in_use(config.proxy.mixed_port, None).await {
+        return Err(IpcError::new(
+            ErrorCode::ProxyPortInUse,
+            format!("Mixed port {} is in use", config.proxy.mixed_port),
         ));
     }
 
@@ -477,6 +490,22 @@ async fn handle_connect_server(state: &DaemonState, params: &serde_json::Value) 
                     }),
                 )
                 .await;
+            // Forward SSH auth banner (RFC4252 §5.4) — the welcome message
+            // sent by the server during authentication. SecureCRT shows this
+            // on connect; we broadcast it so the frontend can display it.
+            if let Some(banner) = server.auth_banner().await {
+                if !banner.is_empty() {
+                    state
+                        .broadcast(
+                            "ssh:banner",
+                            serde_json::json!({
+                                "server_id": server_id,
+                                "banner": banner,
+                            }),
+                        )
+                        .await;
+                }
+            }
             Ok(serde_json::json!({ "server_id": server_id, "status": "connected", "client_ip": client_ip }))
         }
         Err(e) => {
@@ -531,6 +560,9 @@ async fn handle_disconnect_server(state: &DaemonState, params: &serde_json::Valu
     maybe_broadcast_cli_focus(state, params, server_id, Some("connection")).await;
     let server = state.server_manager.get_server(server_id).await?;
     server.disconnect().await?;
+
+    // Close all terminal sessions for this server
+    state.terminal_manager.close_all_for_server(server_id).await;
 
     // Release the connection slot (§1.2)
     state.server_manager.release_connection().await;
@@ -671,6 +703,37 @@ async fn handle_update_server(state: &DaemonState, params: &serde_json::Value) -
     let server_id = params["server_id"]
         .as_str()
         .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing server_id"))?;
+
+    // Check port conflicts before applying changes
+    let new_socks5 = params["socks5_port"].as_u64().map(|v| v as u16);
+    let new_http = params["http_port"].as_u64().map(|v| v as u16);
+    let new_mixed = params["mixed_port"].as_u64().map(|v| v as u16);
+
+    if let Some(socks5) = new_socks5 {
+        if state.server_manager.is_socks5_port_in_use(socks5, Some(server_id)).await {
+            return Err(IpcError::new(
+                ErrorCode::ProxyPortInUse,
+                format!("SOCKS5 port {} is in use", socks5),
+            ));
+        }
+    }
+    if let Some(http) = new_http {
+        if state.server_manager.is_http_port_in_use(http, Some(server_id)).await {
+            return Err(IpcError::new(
+                ErrorCode::ProxyPortInUse,
+                format!("HTTP port {} is in use", http),
+            ));
+        }
+    }
+    if let Some(mixed) = new_mixed {
+        if mixed > 0 && state.server_manager.is_mixed_port_in_use(mixed, Some(server_id)).await {
+            return Err(IpcError::new(
+                ErrorCode::ProxyPortInUse,
+                format!("Mixed port {} is in use", mixed),
+            ));
+        }
+    }
+
     // Update config in config manager and get the updated config
     let mgr = state.config_manager.lock().await;
     let updated_config = mgr.modify(|config| {
@@ -2096,6 +2159,113 @@ impl From<vps_guard_core::Error> for IpcError {
             vps_guard_core::Error::Other(msg) => IpcError::new(ErrorCode::Internal, msg),
         }
     }
+}
+
+// === SECTION: Terminal handlers ===
+
+/// Open a new interactive terminal session
+async fn handle_terminal_open(state: &DaemonState, params: &serde_json::Value) -> HandlerResult {
+    let server_id = params
+        .get("server_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing server_id"))?;
+    let cols = params.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u32;
+    let rows = params.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u32;
+
+    tracing::info!("handle_terminal_open: server_id={}, cols={}, rows={}", server_id, cols, rows);
+
+    let server = state
+        .server_manager
+        .get_server(server_id)
+        .await
+        .map_err(|e| IpcError::new(ErrorCode::ServerNotFound, e.to_string()))?;
+
+    if !server.ssh_client.is_connected().await {
+        return Err(IpcError::new(
+            ErrorCode::SshDisconnected,
+            "server is not connected — connect first",
+        ));
+    }
+
+    let ssh_handle = server.ssh_client.get_handle().await.ok_or_else(|| {
+        IpcError::new(ErrorCode::SshDisconnected, "SSH handle not available")
+    })?;
+
+    tracing::info!("handle_terminal_open: got SSH handle, opening PTY...");
+
+    let (session_id, initial_output) = state
+        .terminal_manager
+        .open(&ssh_handle, server_id, cols, rows)
+        .await
+        .map_err(|e| IpcError::new(ErrorCode::Internal, e))?;
+
+    tracing::info!("handle_terminal_open: PTY opened, session_id={}, initial_output={} bytes", session_id, initial_output.len());
+
+    Ok(serde_json::json!({ "session_id": session_id, "initial_output": initial_output }))
+}
+
+/// Send user input to a terminal session
+async fn handle_terminal_input(state: &DaemonState, params: &serde_json::Value) -> HandlerResult {
+    let session_id = params
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing session_id"))?;
+    let data = params
+        .get("data")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing data"))?;
+
+    tracing::info!("handle_terminal_input: session_id={} data_len={} data={:?}", session_id, data.len(), data);
+
+    state
+        .terminal_manager
+        .input(session_id, data)
+        .await
+        .map_err(|e| IpcError::new(ErrorCode::Internal, e))?;
+
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// Close a terminal session
+async fn handle_terminal_close(state: &DaemonState, params: &serde_json::Value) -> HandlerResult {
+    let session_id = params
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing session_id"))?;
+
+    state
+        .terminal_manager
+        .close(session_id)
+        .await
+        .map_err(|e| IpcError::new(ErrorCode::Internal, e))?;
+
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// Resize a terminal session
+async fn handle_terminal_resize(state: &DaemonState, params: &serde_json::Value) -> HandlerResult {
+    let session_id = params
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing session_id"))?;
+    let cols = params
+        .get("cols")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing cols"))?
+        as u32;
+    let rows = params
+        .get("rows")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing rows"))?
+        as u32;
+
+    state
+        .terminal_manager
+        .resize(session_id, cols, rows)
+        .await
+        .map_err(|e| IpcError::new(ErrorCode::Internal, e))?;
+
+    Ok(serde_json::json!({ "ok": true }))
 }
 
 #[cfg(test)]

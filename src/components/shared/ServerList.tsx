@@ -3,7 +3,7 @@
 // Features: inline proxy toggle, port copy chip, global health summary,
 //   connect-all/disconnect-all/template-library/settings buttons, aria-live
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useServerStore } from "@/stores/serverStore";
 import { useLogStore } from "@/stores/logStore";
@@ -58,10 +58,17 @@ export function ServerList({
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [dragOverPos, setDragOverPos] = useState<"before" | "after">("before");
+  const [hoverExpand, setHoverExpand] = useState(false);
 
-  // Load servers from daemon on mount
+  // Load servers from daemon on mount. Guard against StrictMode/development
+  // remounts that would otherwise reload the list and flash the sidebar.
+  const initialLoadDone = useRef(false);
   useEffect(() => {
-    loadServers();
+    if (initialLoadDone.current) return;
+    initialLoadDone.current = true;
+    if (servers.length === 0) {
+      loadServers();
+    }
   }, []);
 
   const loadServers = async () => {
@@ -248,59 +255,122 @@ export function ServerList({
     return 0; // keep original order within same group
   });
 
+  const isHoverExpanded = collapsed && hoverExpand;
+  const showFullContent = !collapsed || hoverExpand;
 
   return (
     <div
-      className={`border-r border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-200 ${collapsed ? "w-12" : "w-64"}`}
+      className={`relative flex-shrink-0 ${collapsed ? "w-12" : "w-64"}`}
       role="navigation"
       aria-label={t("server.list")}
+      onMouseEnter={() => setHoverExpand(true)}
+      onMouseLeave={() => setHoverExpand(false)}
     >
+      <div
+        className={`flex flex-col h-full transition-none ${
+          isHoverExpanded
+            ? "absolute inset-y-0 left-0 w-64 z-50 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 shadow-xl"
+            : collapsed
+              ? "w-12 border-r border-gray-200 dark:border-gray-700"
+              : "w-64 border-r border-gray-200 dark:border-gray-700"
+        }`}
+      >
       {/* Collapse toggle + action buttons */}
-      <div className={`p-2 border-b border-gray-200 dark:border-gray-700 space-y-1 ${collapsed ? "flex flex-col items-center" : ""}`}>
-        {collapsed && (
+      <div className={`p-3 border-b border-gray-200 dark:border-gray-700 ${showFullContent ? "flex items-center gap-2" : "flex flex-col items-center gap-2"}`}>
+        {!showFullContent && (
           <button
-            className="px-2 py-1 text-xs rounded bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 w-8"
-            onClick={onToggleCollapse}
+            className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors"
+            onClick={() => {
+              setHoverExpand(false);
+              onToggleCollapse?.();
+            }}
             title={t("server.expand")}
             aria-label={t("server.expand")}
           >
-            →
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="13 17 18 12 13 7" />
+              <polyline points="6 17 11 12 6 7" />
+            </svg>
           </button>
         )}
-        <div className={`flex gap-1 ${collapsed ? "flex-col" : ""}`}>
+        {showFullContent ? (
           <button
-            className={`px-2 py-1.5 text-sm rounded bg-blue-500 text-white hover:bg-blue-600 ${collapsed ? "w-8" : "flex-1"}`}
-            onClick={() => (onAddServer ? onAddServer() : setShowAddDialog(true))}
+            className="flex items-center justify-center rounded-lg bg-blue-500 text-white hover:bg-blue-600 transition-colors shadow-sm px-3 py-1.5 text-xs font-medium flex-1"
+            onClick={() => {
+              if (collapsed) setHoverExpand(false);
+              onAddServer ? onAddServer() : setShowAddDialog(true);
+            }}
+            title={t("server.add")}
+            aria-label={t("server.add")}
+          >
+            + {t("server.add")}
+          </button>
+        ) : (
+          <button
+            className="w-8 h-8 flex items-center justify-center rounded-lg bg-blue-500 text-white hover:bg-blue-600 transition-colors shadow-sm"
+            onClick={() => {
+              if (collapsed) setHoverExpand(false);
+              onAddServer ? onAddServer() : setShowAddDialog(true);
+            }}
             title={t("server.add")}
             aria-label={t("server.add")}
           >
             +
           </button>
+        )}
+        <button
+          className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors"
+          onClick={() => {
+            if (collapsed) setHoverExpand(false);
+            onOpenTemplates?.();
+          }}
+          title={t("template.library")}
+          aria-label={t("template.library")}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+          </svg>
+        </button>
+        <button
+          className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors"
+          onClick={() => {
+            if (collapsed) setHoverExpand(false);
+            onOpenSettings?.();
+          }}
+          title={t("settings.title")}
+          aria-label={t("settings.title")}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
+        {showFullContent && (
           <button
-            className={`px-2 py-1 text-xs rounded bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 ${collapsed ? "w-8" : "flex-1"}`}
-            onClick={onOpenTemplates}
-            title={t("template.library")}
+            className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors"
+            onClick={() => {
+              setHoverExpand(false);
+              onToggleCollapse?.();
+            }}
+            title={collapsed ? t("server.expand") : t("server.collapse")}
+            aria-label={collapsed ? t("server.expand") : t("server.collapse")}
           >
-            {collapsed ? "T" : t("template.library")}
+            {collapsed ? (
+              // Sidebar is collapsed (currently hover-expanded) — show expand icon
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="13 17 18 12 13 7" />
+                <polyline points="6 17 11 12 6 7" />
+              </svg>
+            ) : (
+              // Sidebar is expanded — show collapse icon
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="11 17 6 12 11 7" />
+                <polyline points="18 17 13 12 18 7" />
+              </svg>
+            )}
           </button>
-          <button
-            className={`px-2 py-1 text-xs rounded bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 ${collapsed ? "w-8" : "flex-1"}`}
-            onClick={onOpenSettings}
-            title={t("settings.title")}
-          >
-            {collapsed ? "S" : t("settings.title")}
-          </button>
-          {!collapsed && (
-            <button
-              className="px-2 py-1 text-xs rounded bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 w-8"
-              onClick={onToggleCollapse}
-              title={t("server.collapse")}
-              aria-label={t("server.collapse")}
-            >
-              ←
-            </button>
-          )}
-        </div>
+        )}
       </div>
 
       {/* Server list */}
@@ -312,16 +382,23 @@ export function ServerList({
         {loading ? (
           <SkeletonList count={3} />
         ) : sorted.length === 0 ? (
-          <div className={`p-4 text-center text-sm text-gray-500 ${collapsed ? "hidden" : ""}`}>
+          <button
+            className={`w-full p-4 text-center text-sm text-gray-500 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors rounded-lg ${!showFullContent ? "hidden" : ""}`}
+            onClick={() => {
+              if (collapsed) setHoverExpand(false);
+              onAddServer ? onAddServer() : setShowAddDialog(true);
+            }}
+            title={t("server.add")}
+          >
             {t("server.add")}
-          </div>
+          </button>
         ) : (
           sorted.map((server) => (
             <ServerListItem
               key={server.id}
               server={server}
               selected={server.id === selectedId}
-              collapsed={collapsed}
+              collapsed={!showFullContent}
               onSelect={() => selectServer(server.id)}
               onToggleProxy={() =>
                 handleToggleProxy(server.id, server.proxy_running)
@@ -385,6 +462,7 @@ export function ServerList({
           ))
         )}
       </div>
+      </div>
       {showAddDialog && (
         <AddServerDialog
           onAdd={handleAddServer}
@@ -439,10 +517,12 @@ function ServerListItem({
 
   return (
     <div
-      className={`flex items-center gap-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 ${
-        collapsed ? "justify-center px-1 py-2" : "px-3 py-2"
+      className={`group relative flex items-center gap-3 cursor-pointer transition-colors ${
+        collapsed ? "justify-center px-2 py-3" : "px-4 py-3"
       } ${
-        selected ? "bg-blue-50 dark:bg-blue-900/30" : ""
+        selected
+          ? "bg-blue-50/80 dark:bg-blue-900/20"
+          : "hover:bg-gray-50 dark:hover:bg-gray-800/60"
       } ${isDragged ? "opacity-40" : ""} ${
         isDragOver && dragOverPos === "before" ? "border-t-2 border-blue-400" : ""
       } ${isDragOver && dragOverPos === "after" ? "border-b-2 border-blue-400" : ""}`}
@@ -465,15 +545,18 @@ function ServerListItem({
       }}
       title={collapsed ? server.name : undefined}
     >
+      {selected && (
+        <span className="absolute left-0 top-3 bottom-3 w-1 bg-blue-500 rounded-r-full" />
+      )}
       <div
-        className={`w-3 h-3 flex-shrink-0 ${STATUS_COLORS[server.current_status]} ${STATUS_SHAPES[server.current_status]}`}
+        className={`w-2.5 h-2.5 flex-shrink-0 rounded-full ${STATUS_COLORS[server.current_status]} ${STATUS_SHAPES[server.current_status]}`}
         aria-hidden
       />
       {!collapsed && (
         <>
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium truncate">{server.name}</div>
-            <div className="text-xs text-gray-500 truncate">
+            <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">{server.name}</div>
+            <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
               {server.ssh?.host || server.name}
             </div>
           </div>
@@ -481,7 +564,7 @@ function ServerListItem({
           {/* Firewall not configured badge (§9.4) */}
           {!server.suppress_firewall_badge && server.current_status === "connected" && (
             <span
-              className="text-xs px-1 py-0.5 rounded bg-yellow-100 dark:bg-yellow-900/50 text-yellow-700 dark:text-yellow-400"
+              className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-100 dark:bg-yellow-900/50 text-yellow-700 dark:text-yellow-400 font-medium"
               title={t("server.firewallNotConfigured")}
             >
               FW
@@ -490,7 +573,11 @@ function ServerListItem({
 
           {/* Port copy chip (U8) */}
           <button
-            className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 hover:bg-blue-100 dark:hover:bg-blue-900 text-gray-600 dark:text-gray-400"
+            className={`text-[10px] px-1.5 py-0.5 rounded-md font-mono transition-colors ${
+              copiedPort
+                ? "bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400"
+                : "bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-blue-100 dark:hover:bg-blue-900 hover:text-blue-600 dark:hover:text-blue-400"
+            }`}
             onClick={(e) => {
               e.stopPropagation();
               onCopyPort();
@@ -503,10 +590,10 @@ function ServerListItem({
 
           {/* Inline proxy toggle (U6) */}
           <button
-            className={`w-8 h-4 rounded-full transition-colors relative ${
+            className={`w-8 h-4 rounded-full transition-colors relative flex-shrink-0 ${
               server.proxy_running
                 ? "bg-blue-500"
-                : "bg-gray-300 dark:bg-gray-600"
+                : "bg-gray-200 dark:bg-gray-600"
             }`}
             onClick={(e) => {
               e.stopPropagation();
@@ -517,8 +604,8 @@ function ServerListItem({
             aria-pressed={server.proxy_running}
           >
             <span
-              className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
-                server.proxy_running ? "left-4" : "left-0.5"
+              className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${
+                server.proxy_running ? "translate-x-4" : "translate-x-0.5"
               }`}
             />
           </button>

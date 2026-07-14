@@ -32,7 +32,7 @@ test.describe("Server selection", () => {
     await page.locator("text=Tokyo VPS").first().click();
     await page.waitForTimeout(300);
     // Detail panel should show the server name as header
-    await expect(page.locator("h1:has-text('Tokyo VPS')")).toBeVisible({ timeout: 3000 });
+    await expect(page.locator(".text-xl.font-bold:has-text('Tokyo VPS')")).toBeVisible({ timeout: 3000 });
   });
 
   test("selecting different server changes detail content", async ({ page }) => {
@@ -40,11 +40,11 @@ test.describe("Server selection", () => {
     // Select first
     await page.locator("text=Tokyo VPS").first().click();
     await page.waitForTimeout(200);
-    await expect(page.locator("h1:has-text('Tokyo VPS')")).toBeVisible({ timeout: 3000 });
+    await expect(page.locator(".text-xl.font-bold:has-text('Tokyo VPS')")).toBeVisible({ timeout: 3000 });
     // Select second
     await page.locator("text=US West").first().click();
     await page.waitForTimeout(200);
-    await expect(page.locator("h1:has-text('US West')")).toBeVisible({ timeout: 3000 });
+    await expect(page.locator(".text-xl.font-bold:has-text('US West')")).toBeVisible({ timeout: 3000 });
   });
 });
 

@@ -37,7 +37,19 @@ impl ConfigManager {
     /// Load config from file
     pub fn load(path: impl AsRef<std::path::Path>) -> anyhow::Result<Self> {
         let storage = FileConfigStorage::new(path);
-        let config = storage.load().unwrap_or_default();
+        let config = storage.load().unwrap_or_else(|e| {
+            // Log loudly instead of silently using defaults. The storage
+            // layer already backed up the corrupt file (if it was parseable
+            // JSON), so falling back to defaults here won't destroy the
+            // original data — but the user must be told.
+            tracing::error!(
+                "failed to load config from {}: {} — starting with empty config \
+                 (corrupt file was backed up if it was unparseable JSON)",
+                storage.path().display(),
+                e
+            );
+            Config::default()
+        });
         Ok(Self {
             config: Arc::new(RwLock::new(config)),
             storage: Arc::new(storage),

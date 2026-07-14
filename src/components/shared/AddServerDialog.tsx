@@ -1,10 +1,11 @@
 // AddServerDialog — add server form (FP-8.9)
 // Calls ipc_add_server IPC to actually add the server to daemon config.
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { ipcInvoke, formatIpcError } from "@/hooks/useIpc";
 import { Modal } from "@/components/ui/Modal";
+import { useServerStore } from "@/stores/serverStore";
 
 interface AddServerDialogProps {
   onAdd: () => void;
@@ -26,6 +27,27 @@ interface AddServerDialogProps {
 export function AddServerDialog({ onAdd, onCancel, editServer }: AddServerDialogProps) {
   const { t } = useTranslation();
   const isEdit = !!editServer;
+  const existingServers = useServerStore((s) => s.servers);
+
+  // Compute next available ports based on existing servers
+  const { nextSocks5, nextHttp } = useMemo(() => {
+    const usedSocks5 = new Set<number>();
+    const usedHttp = new Set<number>();
+    for (const s of existingServers) {
+      if (s.proxy?.socks5_port) usedSocks5.add(s.proxy.socks5_port);
+      if (s.proxy?.http_port) usedHttp.add(s.proxy.http_port);
+      if (s.proxy?.mixed_port && s.proxy.mixed_port > 0) {
+        usedSocks5.add(s.proxy.mixed_port);
+        usedHttp.add(s.proxy.mixed_port);
+      }
+    }
+    let socks5 = 1080;
+    while (usedSocks5.has(socks5)) socks5++;
+    let http = 8080;
+    while (usedHttp.has(http)) http++;
+    return { nextSocks5: socks5, nextHttp: http };
+  }, [existingServers]);
+
   const [name, setName] = useState(editServer?.name || "");
   const [host, setHost] = useState(editServer?.host || "");
   const [port, setPort] = useState(String(editServer?.port || 22));
@@ -33,9 +55,14 @@ export function AddServerDialog({ onAdd, onCancel, editServer }: AddServerDialog
   const [authType, setAuthType] = useState<"password" | "key">(editServer?.authType || "password");
   const [password, setPassword] = useState("");
   const [keyPath, setKeyPath] = useState(editServer?.keyPath || "");
-  const [socks5Port, setSocks5Port] = useState(String(editServer?.socks5Port || 1080));
-  const [httpPort, setHttpPort] = useState(String(editServer?.httpPort || 8080));
-  const [mixedPort, setMixedPort] = useState(String(editServer?.mixedPort ?? 1080));
+  const [socks5Port, setSocks5Port] = useState(String(editServer?.socks5Port || nextSocks5));
+  const [httpPort, setHttpPort] = useState(String(editServer?.httpPort || nextHttp));
+  // Default to mixed port enabled for new servers (mixed port = socks5 port,
+  // which also serves HTTP on the same port). For edit mode, preserve the
+  // existing value (0 = disabled).
+  const [mixedPort, setMixedPort] = useState(
+    String(editServer ? (editServer.mixedPort ?? 0) : nextSocks5)
+  );
   const mixedEnabled = parseInt(mixedPort) > 0;
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);

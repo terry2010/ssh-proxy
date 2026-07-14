@@ -134,6 +134,12 @@ pub enum Action {
 
     // Onboarding (FP-8.1)
     DetectFirewall,
+
+    // Terminal — interactive SSH shell sessions
+    TerminalOpen,
+    TerminalInput,
+    TerminalClose,
+    TerminalResize,
 }
 
 /// Event types (daemon → all clients broadcast, §10.6)
@@ -273,6 +279,8 @@ mod tests {
             Action::GetLogs, Action::ClearLogs, Action::ExportLogs,
             Action::Shutdown, Action::GetDaemonStatus,
             Action::DetectFirewall,
+            Action::TerminalOpen, Action::TerminalInput,
+            Action::TerminalClose, Action::TerminalResize,
         ];
         for action in actions {
             let json = serde_json::to_string(&action).unwrap();

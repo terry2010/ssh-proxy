@@ -21,7 +21,8 @@ pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env()
             .add_directive("vps_guard_app=info".parse().unwrap())
-            .add_directive("vps_guard_daemon=info".parse().unwrap()))
+            .add_directive("vps_guard_daemon=info".parse().unwrap())
+            .add_directive("vps_guard_core=info".parse().unwrap()))
         .with_writer(std::io::stderr)
         .init();
 
@@ -174,6 +175,11 @@ pub fn run() {
             ipc_set_autostart,
             ipc_get_autostart,
             ipc_send_notification,
+            // Terminal — interactive SSH shell sessions
+            ipc_terminal_open,
+            ipc_terminal_input,
+            ipc_terminal_close,
+            ipc_terminal_resize,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -785,6 +791,62 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("system tray icon created");
     Ok(())
+}
+
+// === SECTION: Terminal IPC commands ===
+
+#[tauri::command]
+async fn ipc_terminal_open(
+    state: tauri::State<'_, AppState>,
+    server_id: String,
+    cols: Option<u64>,
+    rows: Option<u64>,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({
+        "server_id": server_id,
+        "cols": cols.unwrap_or(80),
+        "rows": rows.unwrap_or(24),
+    });
+    forward_to_daemon(&state, vps_guard_daemon::proto::Action::TerminalOpen, params).await
+}
+
+#[tauri::command]
+async fn ipc_terminal_input(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    data: String,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({
+        "session_id": session_id,
+        "data": data,
+    });
+    forward_to_daemon(&state, vps_guard_daemon::proto::Action::TerminalInput, params).await
+}
+
+#[tauri::command]
+async fn ipc_terminal_close(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({
+        "session_id": session_id,
+    });
+    forward_to_daemon(&state, vps_guard_daemon::proto::Action::TerminalClose, params).await
+}
+
+#[tauri::command]
+async fn ipc_terminal_resize(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    cols: u64,
+    rows: u64,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({
+        "session_id": session_id,
+        "cols": cols,
+        "rows": rows,
+    });
+    forward_to_daemon(&state, vps_guard_daemon::proto::Action::TerminalResize, params).await
 }
 
 /// Create a tray icon image based on color

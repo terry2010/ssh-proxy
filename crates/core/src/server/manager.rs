@@ -123,22 +123,41 @@ impl ServerManager {
         *self.connect_count.lock().await
     }
 
-    /// Check if a SOCKS5 port is in use by any server
+    /// Check if a SOCKS5 port is in use by any server (including mixed ports)
     pub async fn is_socks5_port_in_use(&self, port: u16, exclude: Option<&str>) -> bool {
         let servers = self.servers.lock().await;
         servers
             .iter()
             .filter(|(id, _)| Some(id.as_str()) != exclude)
-            .any(|(_, s)| s.config.proxy.socks5_port == port)
+            .any(|(_, s)| {
+                s.config.proxy.socks5_port == port
+                    || (s.config.proxy.mixed_port > 0 && s.config.proxy.mixed_port == port)
+            })
     }
 
-    /// Check if an HTTP port is in use by any server
+    /// Check if an HTTP port is in use by any server (including mixed ports)
     pub async fn is_http_port_in_use(&self, port: u16, exclude: Option<&str>) -> bool {
         let servers = self.servers.lock().await;
         servers
             .iter()
             .filter(|(id, _)| Some(id.as_str()) != exclude)
-            .any(|(_, s)| s.config.proxy.http_port == port)
+            .any(|(_, s)| {
+                s.config.proxy.http_port == port
+                    || (s.config.proxy.mixed_port > 0 && s.config.proxy.mixed_port == port)
+            })
+    }
+
+    /// Check if a mixed port is in use by any server (checking socks5, http, and mixed)
+    pub async fn is_mixed_port_in_use(&self, port: u16, exclude: Option<&str>) -> bool {
+        let servers = self.servers.lock().await;
+        servers
+            .iter()
+            .filter(|(id, _)| Some(id.as_str()) != exclude)
+            .any(|(_, s)| {
+                s.config.proxy.mixed_port == port
+                    || s.config.proxy.socks5_port == port
+                    || s.config.proxy.http_port == port
+            })
     }
 }
 
