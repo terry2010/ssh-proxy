@@ -1,0 +1,119 @@
+name: Release
+
+# Build, sign and publish Tauri desktop bundles for Windows + macOS,
+# create a GitHub Release, and deploy the updater manifest (latest.json)
+# to the gh-pages branch so the in-app auto-updater can fetch it.
+#
+# Trigger: push a semver tag like v0.1.0
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # === Build signed bundles for each desktop platform ===
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            args: "--target aarch64-apple-darwin"
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required secrets
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY secret is missing. See AGENTS.md § Release setup."
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install macOS dependencies
+        if: matrix.platform == 'macos-latest'
+        run: |
+          # Tauri v2 on macOS usually has everything it needs on the runner,
+          # but keep this step as a hook for future universal-binary tooling.
+          true
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Build Tauri release bundle
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: ${{ github.ref_name }}
+          releaseBody: "See the assets below to download this version."
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+  # === Generate latest.json from the signed release assets and deploy to gh-pages ===
+  update-manifest:
+    needs: build
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Generate latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: node scripts/generate-latest-json.mjs
+
+      - name: Deploy latest.json to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public
+          keep_files: true
+
+  # === Publish the draft release once the manifest is live ===
+  publish-release:
+    needs: update-manifest
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish draft release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit ${{ github.ref_name }} --draft=false --repo ${{ github.repository }}

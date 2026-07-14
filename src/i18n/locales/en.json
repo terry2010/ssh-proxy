@@ -1,6 +1,6 @@
 {
   "app": {
-    "name": "VPS Guard",
+    "name": "TermFast",
     "version": "Version"
   },
   "common": {
@@ -303,11 +303,19 @@
     },
     "about": {
       "title": "About",
-      "check_update": "Check for Updates"
+      "check_update": "Check for Updates",
+      "checking": "Checking for updates...",
+      "latest": "Already on the latest version",
+      "failed": "Failed to check for updates",
+      "available": "Update available: {{version}}",
+      "installing": "Downloading update...",
+      "installed": "Update installed. Restart to apply.",
+      "confirm": "Install update {{version}}?",
+      "install": "Install"
     }
   },
   "onboarding": {
-    "welcome": "Welcome to VPS Guard",
+    "welcome": "Welcome to TermFast",
     "quick_mode": "Quick Mode",
     "advanced_mode": "Advanced Mode",
     "skip": "Skip wizard",

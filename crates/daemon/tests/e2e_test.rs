@@ -3,13 +3,13 @@
 //! Tests the full task flow: add server → connect → proxy → trigger → disconnect.
 //! Uses the daemon's IPC protocol directly (no Tauri).
 
-use vps_guard_core::config::{
+use termfast_core::config::{
     Config, IpCheckConfig, ProxyConfig, ReconnectConfig, ServerConfig, SshConfig,
 };
-use vps_guard_core::log::{LogEntry, LogKind, LogLevel};
-use vps_guard_core::server::instance::ServerStatus;
-use vps_guard_credential::InMemoryCredentialStore;
-use vps_guard_daemon::{DaemonServer, DaemonState};
+use termfast_core::log::{LogEntry, LogKind, LogLevel};
+use termfast_core::server::instance::ServerStatus;
+use termfast_credential::InMemoryCredentialStore;
+use termfast_daemon::{DaemonServer, DaemonState};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -46,15 +46,15 @@ fn make_test_server(id: &str, name: &str) -> ServerConfig {
 
 async fn setup_daemon() -> (DaemonServer, std::path::PathBuf) {
     let config = Config::default();
-    let mgr = vps_guard_core::config::ConfigManager::with_storage(
+    let mgr = termfast_core::config::ConfigManager::with_storage(
         config,
-        std::sync::Arc::new(vps_guard_core::config::InMemoryConfigStorage::new()),
+        std::sync::Arc::new(termfast_core::config::InMemoryConfigStorage::new()),
     );
     let cred_store = Arc::new(InMemoryCredentialStore::new());
     let state = DaemonState::with_credential_store(mgr, cred_store);
     // Use unique socket path per test
     let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let socket_path = format!("/tmp/vps-guard-e2e-test-{}-{}.sock", std::process::id(), id);
+    let socket_path = format!("/tmp/termfast-e2e-test-{}-{}.sock", std::process::id(), id);
     let _ = std::fs::remove_file(&socket_path);
     let server = DaemonServer::start_with_path(state, socket_path.into()).await.unwrap();
     let socket_path = server.socket_path().to_path_buf();
@@ -126,7 +126,7 @@ async fn test_e2e_multi_server_management() {
 async fn test_e2e_credential_save_and_load() {
     let (server, socket_path) = setup_daemon().await;
 
-    let key = vps_guard_credential::make_key("srv_cred_1", "password");
+    let key = termfast_credential::make_key("srv_cred_1", "password");
     server.state().credential_store.save(&key, "secret123").unwrap();
 
     assert!(server.state().credential_store.has(&key));

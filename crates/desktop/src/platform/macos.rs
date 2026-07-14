@@ -8,14 +8,14 @@ use anyhow::{bail, Result};
 /// macOS platform adapter
 pub struct MacOSAdapter;
 
-/// sudoers file path for vps-guard
-const SUDOERS_PATH: &str = "/etc/sudoers.d/vps-guard";
+/// sudoers file path for termfast
+const SUDOERS_PATH: &str = "/etc/sudoers.d/termfast";
 
 /// sudoers file content template
 pub fn sudoers_content() -> String {
     let user = whoami::username().unwrap_or_else(|_| "unknown".to_string());
     format!(
-        "# VPS Guard system proxy management\n\
+        "# TermFast system proxy management\n\
          {user} ALL=(root) NOPASSWD: /usr/sbin/networksetup -setsocksfirewallproxy *\n\
          {user} ALL=(root) NOPASSWD: /usr/sbin/networksetup -setwebproxy *\n\
          {user} ALL=(root) NOPASSWD: /usr/sbin/networksetup -setsocksfirewallproxystate *\n\
@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn test_check_sudoers_valid_no_file() {
         // Should return false when file doesn't exist
-        // (assuming /etc/sudoers.d/vps-guard doesn't exist in test env)
+        // (assuming /etc/sudoers.d/termfast doesn't exist in test env)
         let result = check_sudoers_valid();
         // May be true if someone has set it up, but typically false
         // Just verify it doesn't panic

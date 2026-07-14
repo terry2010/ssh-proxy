@@ -10,6 +10,7 @@ import i18n, { resolveLanguage } from "@/i18n/config";
 import { useDaemonEvents } from "@/hooks/useDaemonEvents";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { ipcInvoke } from "@/hooks/useIpc";
+import { scheduleAutoUpdateCheck } from "@/hooks/useUpdater";
 import { ServerList } from "@/components/shared/ServerList";
 import { LogPanel } from "@/components/shared/LogPanel";
 import { PendingEventsBanner } from "@/components/shared/PendingEventsBanner";
@@ -23,7 +24,7 @@ import { LogViewer } from "@/components/shared/LogViewer";
 import { UndoToast } from "@/components/shared/UndoToast";
 import { ConfirmDialog, type DangerLevel } from "@/components/ui/ConfirmDialog";
 import { ContextMenuProvider } from "@/components/ui/ContextMenu";
-import { Toaster } from "sonner";
+import { Toaster, toast } from "sonner";
 
 export default function App() {
   // Listen for all daemon events (server status, proxy, triggers, logs)
@@ -49,7 +50,7 @@ export default function App() {
         }
         if (granted) {
           const { sendNotification } = await import("@tauri-apps/plugin-notification");
-          sendNotification({ title: "VPS Guard", body: "Notifications enabled" });
+          sendNotification({ title: "TermFast", body: "Notifications enabled" });
           console.log("[App] test notification sent");
         }
       } catch (e) { console.error("[App] notification init failed:", e); }
@@ -73,6 +74,44 @@ export default function App() {
         if (data?.servers) setServers(data.servers);
       })
       .catch((e) => console.error("load servers failed:", e));
+
+    // Silent auto-check for updates 5s after startup (FP-10.2)
+    const cancelAutoCheck = scheduleAutoUpdateCheck(5000, (result) => {
+      const version = result.info.version;
+      toast(
+        <div className="flex flex-col gap-1">
+          <div className="text-sm font-medium">{t("settings.about.available", { version })}</div>
+          {result.info.body && (
+            <div className="text-xs text-gray-500 dark:text-gray-400 max-h-24 overflow-y-auto whitespace-pre-line">
+              {result.info.body}
+            </div>
+          )}
+        </div>,
+        {
+          duration: 20000,
+          action: {
+            label: t("settings.about.install"),
+            onClick: async () => {
+              const progressId = toast.loading(t("settings.about.installing"));
+              try {
+                const { installUpdate } = await import("@/hooks/useUpdater");
+                await installUpdate(result.update, (percent) => {
+                  toast.loading(`${t("settings.about.installing")} ${percent}%`, { id: progressId });
+                });
+                toast.dismiss(progressId);
+                toast.success(t("settings.about.installed"));
+              } catch (e) {
+                toast.dismiss(progressId);
+                toast.error(t("settings.about.failed"));
+                console.error("[App] auto update install failed:", e);
+              }
+            },
+          },
+        }
+      );
+    });
+
+    return () => cancelAutoCheck();
   }, []);
 
   // UI state for modals

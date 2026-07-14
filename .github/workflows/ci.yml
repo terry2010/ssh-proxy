@@ -103,4 +103,4 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - name: Check ${{ matrix.label }}
-        run: cargo check -p vps-guard-core --target ${{ matrix.target }}
+        run: cargo check -p termfast-core --target ${{ matrix.target }}

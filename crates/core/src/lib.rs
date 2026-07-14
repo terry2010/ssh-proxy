@@ -1,4 +1,4 @@
-//! VPS Guard Core — platform-agnostic core library.
+//! TermFast Core — platform-agnostic core library.
 //!
 //! Contains all business logic: config, SSH, proxy, trigger engine.
 //! Does NOT depend on tauri or daemon — keeps mobile cross-compilation possible.

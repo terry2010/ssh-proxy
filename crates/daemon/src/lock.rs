@@ -20,7 +20,7 @@ pub struct DaemonLock {
 impl DaemonLock {
     /// Get the default daemon.lock path
     pub fn default_path() -> Result<PathBuf> {
-        let proj_dir = directories::ProjectDirs::from("", "", "vps-guard")
+        let proj_dir = directories::ProjectDirs::from("", "", "termfast")
             .ok_or_else(|| anyhow::anyhow!("cannot determine data directory"))?;
         Ok(proj_dir.data_dir().join("daemon.lock"))
     }
@@ -154,20 +154,20 @@ pub fn find_daemon_socket() -> Result<Option<String>> {
 pub fn default_socket_path() -> Result<String> {
     #[cfg(unix)]
     {
-        let proj_dir = directories::ProjectDirs::from("", "", "vps-guard")
+        let proj_dir = directories::ProjectDirs::from("", "", "termfast")
             .ok_or_else(|| anyhow::anyhow!("cannot determine data directory"))?;
         Ok(proj_dir.data_dir().join("daemon.sock").to_string_lossy().into())
     }
     #[cfg(not(unix))]
     {
-        Ok(r"\\.\pipe\vps-guard-daemon".into())
+        Ok(r"\\.\pipe\termfast-daemon".into())
     }
 }
 
 /// Get the Windows named pipe name
 #[cfg(target_os = "windows")]
 pub fn windows_pipe_name() -> &'static str {
-    r"\\.\pipe\vps-guard-daemon"
+    r"\\.\pipe\termfast-daemon"
 }
 
 #[cfg(test)]

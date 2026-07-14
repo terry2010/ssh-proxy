@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
-use vps_guard_core::ssh::pty;
+use termfast_core::ssh::pty;
 
 /// Commands sent to a terminal session's write task
 enum TerminalCmd {
@@ -50,7 +50,7 @@ impl TerminalManager {
     /// Returns the session ID.
     pub async fn open(
         &self,
-        ssh_handle: &client::Handle<vps_guard_core::ssh::client::SshHandler>,
+        ssh_handle: &client::Handle<termfast_core::ssh::client::SshHandler>,
         server_id: &str,
         cols: u32,
         rows: u32,
@@ -271,7 +271,7 @@ impl TerminalManager {
 // === SECTION 2 END ===
 
 async fn try_open_pty_or_fallback(
-    ssh_handle: &client::Handle<vps_guard_core::ssh::client::SshHandler>,
+    ssh_handle: &client::Handle<termfast_core::ssh::client::SshHandler>,
     cols: u32,
     rows: u32,
 ) -> Result<(russh::Channel<client::Msg>, Vec<u8>), String> {

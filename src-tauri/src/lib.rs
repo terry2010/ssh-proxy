@@ -1,4 +1,4 @@
-//! VPS Guard Tauri App — main entry point
+//! TermFast Tauri App — main entry point
 //!
 //! Embeds the daemon and provides IPC bridge to the React frontend.
 //! All IPC commands forward to the daemon handler (FP-6.2) to ensure
@@ -20,18 +20,19 @@ pub fn run() {
     // Initialize tracing to stderr for debugging
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env()
-            .add_directive("vps_guard_app=info".parse().unwrap())
-            .add_directive("vps_guard_daemon=info".parse().unwrap())
-            .add_directive("vps_guard_core=info".parse().unwrap()))
+            .add_directive("termfast_app=info".parse().unwrap())
+            .add_directive("termfast_daemon=info".parse().unwrap())
+            .add_directive("termfast_core=info".parse().unwrap()))
         .with_writer(std::io::stderr)
         .init();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec!["com.vpsguard.app"]),
+            Some(vec!["com.termfast.app"]),
         ))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_network::init())
@@ -89,7 +90,7 @@ pub fn run() {
 
             // Apply window vibrancy effect (FP-6.10)
             if let Some(window) = app.get_webview_window("main") {
-                let adapter = vps_guard_desktop::platform::get_platform_adapter();
+                let adapter = termfast_desktop::platform::get_platform_adapter();
                 if let Err(e) = adapter.apply_window_effect(&window) {
                     tracing::warn!("failed to apply window effect: {}", e);
                 }
@@ -194,21 +195,21 @@ pub fn run() {
 /// All IPC commands go through this to ensure events are broadcast (FP-6.2).
 async fn forward_to_daemon(
     state: &tauri::State<'_, AppState>,
-    action: vps_guard_daemon::proto::Action,
+    action: termfast_daemon::proto::Action,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     // Daemon may not be ready yet (async startup) — retry briefly
     for _attempt in 0..20 {
         let guard = state.daemon.lock().await;
         if let Some(ref daemon) = *guard {
-            let req = vps_guard_daemon::proto::Request::new(action, params);
-            let resp = vps_guard_daemon::handler::handle_request(&req, daemon.server.state()).await;
+            let req = termfast_daemon::proto::Request::new(action, params);
+            let resp = termfast_daemon::handler::handle_request(&req, daemon.server.state()).await;
             match resp {
-                vps_guard_daemon::proto::Response::Ok { data, .. } => return Ok(data),
-                vps_guard_daemon::proto::Response::Err { error, .. } => {
+                termfast_daemon::proto::Response::Ok { data, .. } => return Ok(data),
+                termfast_daemon::proto::Response::Err { error, .. } => {
                     return Err(format!("{:?}: {}", error.code, error.detail));
                 }
-                vps_guard_daemon::proto::Response::Event { .. } => {
+                termfast_daemon::proto::Response::Event { .. } => {
                     return Err("unexpected event response".to_string());
                 }
             }
@@ -224,7 +225,7 @@ async fn forward_to_daemon(
 
 #[tauri::command]
 async fn ipc_get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
-    forward_to_daemon(&state, vps_guard_daemon::proto::Action::GetConfig, serde_json::json!({})).await
+    forward_to_daemon(&state, termfast_daemon::proto::Action::GetConfig, serde_json::json!({})).await
 }
 
 #[tauri::command]
@@ -248,12 +249,12 @@ async fn ipc_update_general_config(
     if let Some(v) = log_to_file { params["log_to_file"] = serde_json::json!(v); }
     if let Some(v) = log_max_days { params["log_max_days"] = serde_json::json!(v); }
     if let Some(v) = log_max_size_mb { params["log_max_size_mb"] = serde_json::json!(v); }
-    forward_to_daemon(&state, vps_guard_daemon::proto::Action::UpdateGeneralConfig, params).await
+    forward_to_daemon(&state, termfast_daemon::proto::Action::UpdateGeneralConfig, params).await
 }
 
 #[tauri::command]
 async fn ipc_list_servers(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
-    forward_to_daemon(&state, vps_guard_daemon::proto::Action::ListServers, serde_json::json!({})).await
+    forward_to_daemon(&state, termfast_daemon::proto::Action::ListServers, serde_json::json!({})).await
 }
 
 #[tauri::command]
@@ -263,7 +264,7 @@ async fn ipc_connect_server(
 ) -> Result<serde_json::Value, String> {
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::ConnectServer,
+        termfast_daemon::proto::Action::ConnectServer,
         serde_json::json!({ "server_id": server_id }),
     ).await
 }
@@ -275,7 +276,7 @@ async fn ipc_disconnect_server(
 ) -> Result<serde_json::Value, String> {
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::DisconnectServer,
+        termfast_daemon::proto::Action::DisconnectServer,
         serde_json::json!({ "server_id": server_id }),
     ).await
 }
@@ -287,7 +288,7 @@ async fn ipc_add_server(
 ) -> Result<String, String> {
     let result = forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::AddServer,
+        termfast_daemon::proto::Action::AddServer,
         config,
     ).await?;
     result["server_id"].as_str().map(|s| s.to_string()).ok_or_else(|| "missing server_id in response".to_string())
@@ -300,7 +301,7 @@ async fn ipc_remove_server(
 ) -> Result<(), String> {
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::RemoveServer,
+        termfast_daemon::proto::Action::RemoveServer,
         serde_json::json!({ "server_id": server_id }),
     ).await?;
     Ok(())
@@ -313,7 +314,7 @@ async fn ipc_reorder_servers(
 ) -> Result<serde_json::Value, String> {
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::ReorderServers,
+        termfast_daemon::proto::Action::ReorderServers,
         serde_json::json!({ "server_ids": server_ids }),
     ).await
 }
@@ -336,7 +337,7 @@ async fn ipc_update_server(
     if let Some(s) = ssh { params["ssh"] = s; }
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::UpdateServer,
+        termfast_daemon::proto::Action::UpdateServer,
         params,
     ).await
 }
@@ -349,7 +350,7 @@ async fn ipc_toggle_proxy(
 ) -> Result<serde_json::Value, String> {
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::ToggleProxy,
+        termfast_daemon::proto::Action::ToggleProxy,
         serde_json::json!({ "server_id": server_id, "enabled": enabled }),
     ).await
 }
@@ -361,7 +362,7 @@ async fn ipc_get_proxy_status(
 ) -> Result<serde_json::Value, String> {
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::GetProxyStatus,
+        termfast_daemon::proto::Action::GetProxyStatus,
         serde_json::json!({ "server_id": server_id }),
     ).await
 }
@@ -374,26 +375,26 @@ async fn ipc_get_logs(
 ) -> Result<serde_json::Value, String> {
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::GetLogs,
+        termfast_daemon::proto::Action::GetLogs,
         serde_json::json!({ "server_id": server_id, "limit": limit }),
     ).await
 }
 
 #[tauri::command]
 async fn ipc_clear_logs(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    forward_to_daemon(&state, vps_guard_daemon::proto::Action::ClearLogs, serde_json::json!({})).await?;
+    forward_to_daemon(&state, termfast_daemon::proto::Action::ClearLogs, serde_json::json!({})).await?;
     Ok(())
 }
 
 #[tauri::command]
 async fn ipc_pause_all_triggers(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    forward_to_daemon(&state, vps_guard_daemon::proto::Action::PauseAllTriggers, serde_json::json!({})).await?;
+    forward_to_daemon(&state, termfast_daemon::proto::Action::PauseAllTriggers, serde_json::json!({})).await?;
     Ok(())
 }
 
 #[tauri::command]
 async fn ipc_resume_all_triggers(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    forward_to_daemon(&state, vps_guard_daemon::proto::Action::ResumeAllTriggers, serde_json::json!({})).await?;
+    forward_to_daemon(&state, termfast_daemon::proto::Action::ResumeAllTriggers, serde_json::json!({})).await?;
     Ok(())
 }
 
@@ -405,14 +406,14 @@ async fn ipc_manual_fire_trigger(
 ) -> Result<serde_json::Value, String> {
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::ManualFireTrigger,
+        termfast_daemon::proto::Action::ManualFireTrigger,
         serde_json::json!({ "server_id": server_id, "trigger_id": trigger_id }),
     ).await
 }
 
 #[tauri::command]
 async fn ipc_list_templates(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
-    forward_to_daemon(&state, vps_guard_daemon::proto::Action::ListTemplates, serde_json::json!({})).await
+    forward_to_daemon(&state, termfast_daemon::proto::Action::ListTemplates, serde_json::json!({})).await
 }
 
 #[tauri::command]
@@ -420,7 +421,7 @@ async fn ipc_create_template(
     state: tauri::State<'_, AppState>,
     template: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    forward_to_daemon(&state, vps_guard_daemon::proto::Action::CreateTemplate, template).await
+    forward_to_daemon(&state, termfast_daemon::proto::Action::CreateTemplate, template).await
 }
 
 #[tauri::command]
@@ -429,7 +430,7 @@ async fn ipc_update_template(
     template_id: String,
     template: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    forward_to_daemon(&state, vps_guard_daemon::proto::Action::UpdateTemplate, serde_json::json!({ "template_id": template_id, "template": template })).await
+    forward_to_daemon(&state, termfast_daemon::proto::Action::UpdateTemplate, serde_json::json!({ "template_id": template_id, "template": template })).await
 }
 
 #[tauri::command]
@@ -437,12 +438,12 @@ async fn ipc_delete_template(
     state: tauri::State<'_, AppState>,
     template_id: String,
 ) -> Result<serde_json::Value, String> {
-    forward_to_daemon(&state, vps_guard_daemon::proto::Action::DeleteTemplate, serde_json::json!({ "template_id": template_id })).await
+    forward_to_daemon(&state, termfast_daemon::proto::Action::DeleteTemplate, serde_json::json!({ "template_id": template_id })).await
 }
 
 #[tauri::command]
 async fn ipc_export_templates(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
-    forward_to_daemon(&state, vps_guard_daemon::proto::Action::ExportTemplates, serde_json::json!({})).await
+    forward_to_daemon(&state, termfast_daemon::proto::Action::ExportTemplates, serde_json::json!({})).await
 }
 
 #[tauri::command]
@@ -450,7 +451,7 @@ async fn ipc_import_templates(
     state: tauri::State<'_, AppState>,
     templates: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    forward_to_daemon(&state, vps_guard_daemon::proto::Action::ImportTemplates, serde_json::json!({ "templates": templates })).await
+    forward_to_daemon(&state, termfast_daemon::proto::Action::ImportTemplates, serde_json::json!({ "templates": templates })).await
 }
 
 #[tauri::command]
@@ -462,7 +463,7 @@ async fn ipc_save_credential(
 ) -> Result<(), String> {
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::SaveCredential,
+        termfast_daemon::proto::Action::SaveCredential,
         serde_json::json!({ "server_id": server_id, "credential_type": credential_type, "value": value }),
     ).await?;
     Ok(())
@@ -470,12 +471,12 @@ async fn ipc_save_credential(
 
 #[tauri::command]
 async fn ipc_get_daemon_status(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
-    forward_to_daemon(&state, vps_guard_daemon::proto::Action::GetDaemonStatus, serde_json::json!({})).await
+    forward_to_daemon(&state, termfast_daemon::proto::Action::GetDaemonStatus, serde_json::json!({})).await
 }
 
 #[tauri::command]
 async fn ipc_shutdown(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    forward_to_daemon(&state, vps_guard_daemon::proto::Action::Shutdown, serde_json::json!({})).await?;
+    forward_to_daemon(&state, termfast_daemon::proto::Action::Shutdown, serde_json::json!({})).await?;
     Ok(())
 }
 
@@ -489,7 +490,7 @@ async fn ipc_list_triggers(
     server_id: String,
 ) -> Result<serde_json::Value, String> {
     // Read triggers from server config via handler
-    let config = forward_to_daemon(&state, vps_guard_daemon::proto::Action::GetConfig, serde_json::json!({})).await?;
+    let config = forward_to_daemon(&state, termfast_daemon::proto::Action::GetConfig, serde_json::json!({})).await?;
     let servers = config["servers"].as_array().ok_or("invalid config")?;
     let server = servers.iter().find(|s| s["id"] == server_id).ok_or("server not found")?;
     Ok(server["triggers"].clone())
@@ -503,7 +504,7 @@ async fn ipc_add_trigger(
 ) -> Result<serde_json::Value, String> {
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::AddTrigger,
+        termfast_daemon::proto::Action::AddTrigger,
         serde_json::json!({ "server_id": server_id, "trigger": trigger }),
     ).await
 }
@@ -515,7 +516,7 @@ async fn ipc_update_trigger(
 ) -> Result<serde_json::Value, String> {
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::UpdateTrigger,
+        termfast_daemon::proto::Action::UpdateTrigger,
         params,
     ).await
 }
@@ -527,7 +528,7 @@ async fn ipc_add_trigger_from_template(
     template_id: String,
 ) -> Result<serde_json::Value, String> {
     // Find template, create trigger instance, add to server config
-    let config = forward_to_daemon(&state, vps_guard_daemon::proto::Action::GetConfig, serde_json::json!({})).await?;
+    let config = forward_to_daemon(&state, termfast_daemon::proto::Action::GetConfig, serde_json::json!({})).await?;
     let templates = config["trigger_templates"].as_array().ok_or("invalid config")?;
     let template = templates.iter().find(|t| t["id"] == template_id)
         .ok_or_else(|| format!("template {} not found", template_id))?;
@@ -548,7 +549,7 @@ async fn ipc_add_trigger_from_template(
     });
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::AddTrigger,
+        termfast_daemon::proto::Action::AddTrigger,
         serde_json::json!({ "server_id": server_id, "trigger": trigger }),
     ).await
 }
@@ -562,7 +563,7 @@ async fn ipc_set_system_proxy(
 ) -> Result<serde_json::Value, String> {
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::SetSystemProxy,
+        termfast_daemon::proto::Action::SetSystemProxy,
         serde_json::json!({ "server_id": server_id }),
     ).await
 }
@@ -573,7 +574,7 @@ async fn ipc_clear_system_proxy(
 ) -> Result<serde_json::Value, String> {
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::ClearSystemProxy,
+        termfast_daemon::proto::Action::ClearSystemProxy,
         serde_json::json!({}),
     ).await
 }
@@ -588,7 +589,7 @@ async fn ipc_test_proxy(
     if let Some(u) = url { params["url"] = serde_json::json!(u); }
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::TestProxy,
+        termfast_daemon::proto::Action::TestProxy,
         params,
     ).await
 }
@@ -603,7 +604,7 @@ async fn ipc_switch_auth_method(
 ) -> Result<serde_json::Value, String> {
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::SwitchAuthMethod,
+        termfast_daemon::proto::Action::SwitchAuthMethod,
         serde_json::json!({ "server_id": server_id, "auth_method": auth_method }),
     ).await
 }
@@ -614,11 +615,11 @@ async fn ipc_generate_ssh_key(
     _key_type: String,
     comment: String,
 ) -> Result<serde_json::Value, String> {
-    use vps_guard_core::ssh::auth;
+    use termfast_core::ssh::auth;
     let safe_id = comment.replace(['@', '.', ':', '/'], "_");
     let (key_path, _pub_key, passphrase) = auth::generate_keypair(&safe_id)
         .map_err(|e| e.to_string())?;
-    let cred_key = vps_guard_credential::make_key(&safe_id, vps_guard_credential::cred_type::KEY_PASSPHRASE);
+    let cred_key = termfast_credential::make_key(&safe_id, termfast_credential::cred_type::KEY_PASSPHRASE);
     let guard = state.daemon.lock().await;
     if let Some(ref daemon) = *guard {
         let _ = daemon.server.state().credential_store.save(&cred_key, &passphrase);
@@ -638,8 +639,8 @@ async fn ipc_test_connection(
     password: Option<String>,
     key_path: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    use vps_guard_core::ssh::client::{SshClientConfig, SshClientHandle};
-    use vps_guard_core::ssh::auth::AuthMethod;
+    use termfast_core::ssh::client::{SshClientConfig, SshClientHandle};
+    use termfast_core::ssh::auth::AuthMethod;
 
     let config = SshClientConfig {
         host: host.clone(),
@@ -709,7 +710,7 @@ async fn ipc_detect_firewall(
 ) -> Result<serde_json::Value, String> {
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::DetectFirewall,
+        termfast_daemon::proto::Action::DetectFirewall,
         serde_json::json!({ "server_id": server_id }),
     ).await
 }
@@ -755,7 +756,7 @@ async fn ipc_export_full(
 ) -> Result<serde_json::Value, String> {
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::ExportFull,
+        termfast_daemon::proto::Action::ExportFull,
         serde_json::json!({ "master_password": master_password }),
     ).await
 }
@@ -768,7 +769,7 @@ async fn ipc_import_full(
 ) -> Result<serde_json::Value, String> {
     forward_to_daemon(
         &state,
-        vps_guard_daemon::proto::Action::ImportFull,
+        termfast_daemon::proto::Action::ImportFull,
         serde_json::json!({ "master_password": master_password, "blob": blob }),
     ).await
 }
@@ -825,11 +826,11 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     ])?;
 
     // Create tray icon with a simple colored icon
-    let icon = create_tray_icon(vps_guard_desktop::tray::TrayIconColor::Gray);
+    let icon = create_tray_icon(termfast_desktop::tray::TrayIconColor::Gray);
     let _tray = TrayIconBuilder::new()
         .menu(&menu)
         .icon(icon)
-        .tooltip("VPS Guard")
+        .tooltip("TermFast")
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -864,7 +865,7 @@ async fn ipc_terminal_open(
         "cols": cols.unwrap_or(80),
         "rows": rows.unwrap_or(24),
     });
-    forward_to_daemon(&state, vps_guard_daemon::proto::Action::TerminalOpen, params).await
+    forward_to_daemon(&state, termfast_daemon::proto::Action::TerminalOpen, params).await
 }
 
 #[tauri::command]
@@ -877,7 +878,7 @@ async fn ipc_terminal_input(
         "session_id": session_id,
         "data": data,
     });
-    forward_to_daemon(&state, vps_guard_daemon::proto::Action::TerminalInput, params).await
+    forward_to_daemon(&state, termfast_daemon::proto::Action::TerminalInput, params).await
 }
 
 #[tauri::command]
@@ -888,7 +889,7 @@ async fn ipc_terminal_close(
     let params = serde_json::json!({
         "session_id": session_id,
     });
-    forward_to_daemon(&state, vps_guard_daemon::proto::Action::TerminalClose, params).await
+    forward_to_daemon(&state, termfast_daemon::proto::Action::TerminalClose, params).await
 }
 
 #[tauri::command]
@@ -903,17 +904,17 @@ async fn ipc_terminal_resize(
         "cols": cols,
         "rows": rows,
     });
-    forward_to_daemon(&state, vps_guard_daemon::proto::Action::TerminalResize, params).await
+    forward_to_daemon(&state, termfast_daemon::proto::Action::TerminalResize, params).await
 }
 
 /// Create a tray icon image based on color
-fn create_tray_icon(color: vps_guard_desktop::tray::TrayIconColor) -> tauri::image::Image<'static> {
+fn create_tray_icon(color: termfast_desktop::tray::TrayIconColor) -> tauri::image::Image<'static> {
     // Generate a simple 22x22 colored circle as PNG
     let (r, g, b) = match color {
-        vps_guard_desktop::tray::TrayIconColor::Green => (34, 197, 94),
-        vps_guard_desktop::tray::TrayIconColor::Yellow => (234, 179, 8),
-        vps_guard_desktop::tray::TrayIconColor::Red => (239, 68, 68),
-        vps_guard_desktop::tray::TrayIconColor::Gray => (107, 114, 128),
+        termfast_desktop::tray::TrayIconColor::Green => (34, 197, 94),
+        termfast_desktop::tray::TrayIconColor::Yellow => (234, 179, 8),
+        termfast_desktop::tray::TrayIconColor::Red => (239, 68, 68),
+        termfast_desktop::tray::TrayIconColor::Gray => (107, 114, 128),
     };
 
     // Create a simple 22x22 RGBA image with a filled circle

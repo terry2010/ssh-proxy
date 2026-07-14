@@ -11,7 +11,7 @@ pub use keychain::KeychainCredentialStore;
 pub use memory::InMemoryCredentialStore;
 
 /// Credential type prefix in key naming
-pub const SERVICE_NAME: &str = "vps-guard";
+pub const SERVICE_NAME: &str = "termfast";
 
 /// Credential store trait (§8.7)
 pub trait CredentialStore: Send + Sync {
@@ -24,7 +24,7 @@ pub trait CredentialStore: Send + Sync {
     }
 }
 
-/// Build credential key: `vps-guard::<server_id>::<type>` (§8.7)
+/// Build credential key: `termfast::<server_id>::<type>` (§8.7)
 pub fn make_key(server_id: &str, credential_type: &str) -> String {
     format!("{}::{}::{}", SERVICE_NAME, server_id, credential_type)
 }

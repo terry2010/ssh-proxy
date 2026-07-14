@@ -2,7 +2,7 @@
 //!
 //! Each scenario verifies a specific aspect of russh under load.
 //! Uses a mock SSH server (russh server mode) for testing without a real VPS.
-//! When VPS_GUARD_TEST_HOST is set, tests run against a real VPS instead.
+//! When TERMFAST_TEST_HOST is set, tests run against a real VPS instead.
 
 use anyhow::{anyhow, Result};
 use russh::client::{self, Handle, Handler};
@@ -90,14 +90,14 @@ async fn proxy_request(
 
 /// Get test target: real VPS (from env) or mock server
 fn get_test_target() -> (String, u16, String, String) {
-    if let Ok(host) = std::env::var("VPS_GUARD_TEST_HOST") {
-        let port: u16 = std::env::var("VPS_GUARD_TEST_PORT")
+    if let Ok(host) = std::env::var("TERMFAST_TEST_HOST") {
+        let port: u16 = std::env::var("TERMFAST_TEST_PORT")
             .unwrap_or_else(|_| "22".into())
             .parse()
             .unwrap_or(22);
-        let user = std::env::var("VPS_GUARD_TEST_USER")
+        let user = std::env::var("TERMFAST_TEST_USER")
             .unwrap_or_else(|_| "root".into());
-        let pass = std::env::var("VPS_GUARD_TEST_PASS")
+        let pass = std::env::var("TERMFAST_TEST_PASS")
             .unwrap_or_else(|_| "".into());
         (host, port, user, pass)
     } else {
@@ -107,7 +107,7 @@ fn get_test_target() -> (String, u16, String, String) {
 
 /// Check if using real VPS
 fn using_real_vps() -> bool {
-    std::env::var("VPS_GUARD_TEST_HOST").is_ok()
+    std::env::var("TERMFAST_TEST_HOST").is_ok()
 }
 
 // === SECTION 1 END ===
@@ -518,7 +518,7 @@ pub async fn s9_ring_only_compile() -> Result<()> {
             if stdout.contains(target) {
                 println!("  target {} is installed — attempting cargo check", target);
                 let check = std::process::Command::new("cargo")
-                    .args(["check", "-p", "vps-guard-core", "--target", target])
+                    .args(["check", "-p", "termfast-core", "--target", target])
                     .output();
                 if let Ok(co) = check {
                     if co.status.success() {

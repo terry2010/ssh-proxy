@@ -33,7 +33,7 @@ test.describe("Onboarding mode selection", () => {
   test("shows mode selection on first run with no servers", async ({ page }) => {
     await page.goto("/");
     // Use h1 heading specifically (button in title bar also has this text)
-    await expect(page.locator("h1:has-text('Welcome to VPS Guard')")).toBeVisible({ timeout: 10000 });
+    await expect(page.locator("h1:has-text('Welcome to TermFast')")).toBeVisible({ timeout: 10000 });
     await expect(page.locator("text=Quick Mode")).toBeVisible({ timeout: 3000 });
     await expect(page.locator("text=Advanced Mode")).toBeVisible({ timeout: 3000 });
   });

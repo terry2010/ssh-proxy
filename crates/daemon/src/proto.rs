@@ -4,7 +4,7 @@
 //! Shared between daemon, GUI (Tauri), and CLI.
 
 use serde::{Deserialize, Serialize};
-use vps_guard_core::error::ErrorCode;
+use termfast_core::error::ErrorCode;
 
 /// Client → daemon request
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,8 +53,8 @@ impl IpcError {
     }
 }
 
-impl From<vps_guard_core::error::IpcError> for IpcError {
-    fn from(e: vps_guard_core::error::IpcError) -> Self {
+impl From<termfast_core::error::IpcError> for IpcError {
+    fn from(e: termfast_core::error::IpcError) -> Self {
         Self {
             code: e.code,
             detail: e.detail,

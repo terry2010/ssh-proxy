@@ -6,9 +6,9 @@
 use crate::proto::{Action, IpcError, Request, Response};
 use crate::server::DaemonState;
 use std::sync::Arc;
-use vps_guard_core::error::ErrorCode;
-use vps_guard_core::log::{LogEntry, LogKind, LogLevel};
-use vps_guard_core::config::TriggerType;
+use termfast_core::error::ErrorCode;
+use termfast_core::log::{LogEntry, LogKind, LogLevel};
+use termfast_core::config::TriggerType;
 
 /// Handle a single IPC request
 pub async fn handle_request(request: &Request, state: &DaemonState) -> Response {
@@ -153,13 +153,13 @@ async fn handle_list_servers(state: &DaemonState) -> HandlerResult {
             "triggers": triggers,
             "suppress_firewall_badge": cfg.suppress_firewall_badge,
             "current_status": match status {
-                vps_guard_core::server::instance::ServerStatus::Disconnected => "disconnected",
-                vps_guard_core::server::instance::ServerStatus::Connecting => "connecting",
-                vps_guard_core::server::instance::ServerStatus::Connected => "connected",
-                vps_guard_core::server::instance::ServerStatus::Reconnecting => "reconnecting",
-                vps_guard_core::server::instance::ServerStatus::AuthFailed => "auth_failed",
-                vps_guard_core::server::instance::ServerStatus::Error => "error",
-                vps_guard_core::server::instance::ServerStatus::Offline => "offline",
+                termfast_core::server::instance::ServerStatus::Disconnected => "disconnected",
+                termfast_core::server::instance::ServerStatus::Connecting => "connecting",
+                termfast_core::server::instance::ServerStatus::Connected => "connected",
+                termfast_core::server::instance::ServerStatus::Reconnecting => "reconnecting",
+                termfast_core::server::instance::ServerStatus::AuthFailed => "auth_failed",
+                termfast_core::server::instance::ServerStatus::Error => "error",
+                termfast_core::server::instance::ServerStatus::Offline => "offline",
             },
             "current_ip": ip,
             "client_ip": client_ip,
@@ -195,7 +195,7 @@ async fn handle_get_server_status(state: &DaemonState, params: &serde_json::Valu
 
 /// Add a server
 async fn handle_add_server(state: &DaemonState, params: &serde_json::Value) -> HandlerResult {
-    let config: vps_guard_core::config::ServerConfig =
+    let config: termfast_core::config::ServerConfig =
         serde_json::from_value(params.clone()).map_err(|e| {
             IpcError::new(ErrorCode::InvalidParams, format!("invalid server config: {}", e))
         })?;
@@ -330,7 +330,7 @@ async fn handle_connect_server(state: &DaemonState, params: &serde_json::Value) 
     // Check concurrent connection limit (§1.2: max 3) — only count actually connected servers
     let mut connected_count = 0;
     for s in state.server_manager.list_servers().await {
-        if s.status().await == vps_guard_core::server::instance::ServerStatus::Connected {
+        if s.status().await == termfast_core::server::instance::ServerStatus::Connected {
             connected_count += 1;
         }
     }
@@ -374,7 +374,7 @@ async fn handle_connect_server(state: &DaemonState, params: &serde_json::Value) 
         let log_buffer = state.log_buffer.clone();
         let forwarder = state.event_forwarder_handle();
         let sid = server_id.to_string();
-        server.set_trigger_result_callback(Arc::new(move |event, results: &[vps_guard_core::trigger::engine::TriggerExecutionResult]| {
+        server.set_trigger_result_callback(Arc::new(move |event, results: &[termfast_core::trigger::engine::TriggerExecutionResult]| {
             for r in results {
                 let level = if r.success { LogLevel::Info } else { LogLevel::Error };
                 let kind_str = match event.trigger_type {
@@ -458,10 +458,10 @@ async fn handle_connect_server(state: &DaemonState, params: &serde_json::Value) 
 
     match server.connect(&auth).await {
         Ok(()) => {
-            let log_entry = vps_guard_core::log::LogEntry {
+            let log_entry = termfast_core::log::LogEntry {
                 timestamp: chrono::Utc::now(),
-                level: vps_guard_core::log::LogLevel::Info,
-                kind: vps_guard_core::log::LogKind::Connection,
+                level: termfast_core::log::LogLevel::Info,
+                kind: termfast_core::log::LogKind::Connection,
                 server_id: Some(server_id.to_string()),
                 message: "Connected successfully".to_string(),
                 data: None,
@@ -514,10 +514,10 @@ async fn handle_connect_server(state: &DaemonState, params: &serde_json::Value) 
             let error_detail = err.detail.clone();
             let status = if err.code == ErrorCode::AuthFailed { "auth_failed" } else { "error" };
             // Write log entry to buffer
-            let log_entry = vps_guard_core::log::LogEntry {
+            let log_entry = termfast_core::log::LogEntry {
                 timestamp: chrono::Utc::now(),
-                level: vps_guard_core::log::LogLevel::Error,
-                kind: vps_guard_core::log::LogKind::Connection,
+                level: termfast_core::log::LogLevel::Error,
+                kind: termfast_core::log::LogKind::Connection,
                 server_id: Some(server_id.to_string()),
                 message: format!("Connection failed: {}", error_detail),
                 data: None,
@@ -675,19 +675,19 @@ fn build_auth_method(
     server_id: &str,
     auth_type: &str,
     key_path: &str,
-) -> Result<vps_guard_core::ssh::auth::AuthMethod, IpcError> {
+) -> Result<termfast_core::ssh::auth::AuthMethod, IpcError> {
     match auth_type {
         "password" => {
-            let key = vps_guard_credential::make_key(server_id, vps_guard_credential::cred_type::PASSWORD);
+            let key = termfast_credential::make_key(server_id, termfast_credential::cred_type::PASSWORD);
             let password = state.credential_store.load(&key).map_err(|e| {
                 IpcError::new(ErrorCode::CredentialNotFound, format!("password not found: {}", e))
             })?;
-            Ok(vps_guard_core::ssh::auth::AuthMethod::Password { password })
+            Ok(termfast_core::ssh::auth::AuthMethod::Password { password })
         }
         "key" => {
-            let passphrase_key = vps_guard_credential::make_key(server_id, vps_guard_credential::cred_type::KEY_PASSPHRASE);
+            let passphrase_key = termfast_credential::make_key(server_id, termfast_credential::cred_type::KEY_PASSPHRASE);
             let passphrase = state.credential_store.load(&passphrase_key).ok();
-            Ok(vps_guard_core::ssh::auth::AuthMethod::Key {
+            Ok(termfast_core::ssh::auth::AuthMethod::Key {
                 key_path: key_path.to_string(),
                 passphrase,
             })
@@ -921,11 +921,11 @@ async fn handle_test_proxy(state: &DaemonState, params: &serde_json::Value) -> H
     match &result {
         Ok(exit_ip) => {
             tracing::info!("proxy test success: exit_ip={} latency={}ms", exit_ip, latency_ms);
-            let log_entry = vps_guard_core::log::LogEntry {
+            let log_entry = termfast_core::log::LogEntry {
                 timestamp: chrono::Utc::now(),
                 server_id: Some(server_id.to_string()),
-                level: vps_guard_core::log::LogLevel::Info,
-                kind: vps_guard_core::log::LogKind::Proxy,
+                level: termfast_core::log::LogLevel::Info,
+                kind: termfast_core::log::LogKind::Proxy,
                 message: format!("Proxy test success: exit_ip={} latency={}ms", exit_ip, latency_ms),
                 data: None,
                 execution_id: None,
@@ -952,11 +952,11 @@ async fn handle_test_proxy(state: &DaemonState, params: &serde_json::Value) -> H
         }
         Err(e) => {
             tracing::warn!("proxy test failed: {}", e);
-            let log_entry = vps_guard_core::log::LogEntry {
+            let log_entry = termfast_core::log::LogEntry {
                 timestamp: chrono::Utc::now(),
                 server_id: Some(server_id.to_string()),
-                level: vps_guard_core::log::LogLevel::Error,
-                kind: vps_guard_core::log::LogKind::Proxy,
+                level: termfast_core::log::LogLevel::Error,
+                kind: termfast_core::log::LogKind::Proxy,
                 message: format!("Proxy test failed: {}", e),
                 data: None,
                 execution_id: None,
@@ -1063,7 +1063,7 @@ async fn test_proxy_via_socks5(socks5_port: u16, url: &str) -> std::result::Resu
 
     // Send HTTP request
     let http_req = format!(
-        "GET /{} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nUser-Agent: vps-guard/1.0\r\n\r\n",
+        "GET /{} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nUser-Agent: termfast/1.0\r\n\r\n",
         path, host_port
     );
     tokio::time::timeout(timeout_dur, stream.write_all(http_req.as_bytes())).await
@@ -1129,7 +1129,7 @@ async fn handle_set_system_proxy(state: &DaemonState, params: &serde_json::Value
     };
 
     // Actually set the system proxy via platform adapter (FP-6.6)
-    let proxy_config = vps_guard_core::platform::SystemProxyConfig {
+    let proxy_config = termfast_core::platform::SystemProxyConfig {
         server_id: server_id.to_string(),
         socks5_port,
         http_port,
@@ -1337,7 +1337,7 @@ async fn handle_save_credential(state: &DaemonState, params: &serde_json::Value)
         .as_str()
         .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing value"))?;
 
-    let key = vps_guard_credential::make_key(server_id, cred_type);
+    let key = termfast_credential::make_key(server_id, cred_type);
     state.credential_store.save(&key, value).map_err(|e| {
         IpcError::new(ErrorCode::Internal, format!("credential save error: {}", e))
     })?;
@@ -1353,7 +1353,7 @@ async fn handle_has_credential(state: &DaemonState, params: &serde_json::Value) 
         .as_str()
         .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing credential_type"))?;
 
-    let key = vps_guard_credential::make_key(server_id, cred_type);
+    let key = termfast_credential::make_key(server_id, cred_type);
     let exists = state.credential_store.has(&key);
     Ok(serde_json::json!({ "exists": exists }))
 }
@@ -1367,7 +1367,7 @@ async fn handle_delete_credential(state: &DaemonState, params: &serde_json::Valu
         .as_str()
         .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing credential_type"))?;
 
-    let key = vps_guard_credential::make_key(server_id, cred_type);
+    let key = termfast_credential::make_key(server_id, cred_type);
     state.credential_store.delete(&key).map_err(|e| {
         IpcError::new(ErrorCode::Internal, format!("credential delete error: {}", e))
     })?;
@@ -1391,12 +1391,12 @@ async fn handle_export_full(state: &DaemonState, params: &serde_json::Value) -> 
     for server in &config.servers {
         let sid = &server.id;
         // Try to load password
-        let pwd_key = vps_guard_credential::make_key(sid, vps_guard_credential::cred_type::PASSWORD);
+        let pwd_key = termfast_credential::make_key(sid, termfast_credential::cred_type::PASSWORD);
         if let Ok(pwd) = state.credential_store.load(&pwd_key) {
             passwords.insert(sid.clone(), pwd);
         }
         // Try to load key passphrase
-        let pass_key = vps_guard_credential::make_key(sid, vps_guard_credential::cred_type::KEY_PASSPHRASE);
+        let pass_key = termfast_credential::make_key(sid, termfast_credential::cred_type::KEY_PASSPHRASE);
         if let Ok(pass) = state.credential_store.load(&pass_key) {
             key_passphrases.insert(sid.clone(), pass);
         }
@@ -1408,7 +1408,7 @@ async fn handle_export_full(state: &DaemonState, params: &serde_json::Value) -> 
         }
     }
 
-    let export_data = vps_guard_core::migration::FullExportData {
+    let export_data = termfast_core::migration::FullExportData {
         config: config.clone(),
         passwords,
         key_passphrases,
@@ -1416,7 +1416,7 @@ async fn handle_export_full(state: &DaemonState, params: &serde_json::Value) -> 
     };
 
     // Encrypt with master password
-    let blob = vps_guard_core::migration::export_full(master_password, &export_data)
+    let blob = termfast_core::migration::export_full(master_password, &export_data)
         .map_err(|e| IpcError::new(ErrorCode::Internal, format!("export encrypt error: {}", e)))?;
 
     // Return as base64-encoded string
@@ -1441,7 +1441,7 @@ async fn handle_export_servers(state: &DaemonState) -> HandlerResult {
 
 /// Import server configs (merge into existing)
 async fn handle_import_servers(state: &DaemonState, params: &serde_json::Value) -> HandlerResult {
-    let servers: Vec<vps_guard_core::config::ServerConfig> =
+    let servers: Vec<termfast_core::config::ServerConfig> =
         serde_json::from_value(params["servers"].clone()).map_err(|e| {
             IpcError::new(ErrorCode::InvalidParams, format!("invalid servers: {}", e))
         })?;
@@ -1477,11 +1477,11 @@ async fn handle_import_full(state: &DaemonState, params: &serde_json::Value) -> 
         .map_err(|e| IpcError::new(ErrorCode::InvalidParams, format!("invalid base64: {}", e)))?;
 
     // Decrypt with master password
-    let export_data = vps_guard_core::migration::import_full(master_password, &blob)
+    let export_data = termfast_core::migration::import_full(master_password, &blob)
         .map_err(|e| IpcError::new(ErrorCode::DecryptionFailed, format!("decrypt error: {}", e)))?;
 
     // Reset attempt counter on success
-    vps_guard_core::migration::reset_attempts();
+    termfast_core::migration::reset_attempts();
 
     // Apply config
     let mgr = state.config_manager.lock().await;
@@ -1491,11 +1491,11 @@ async fn handle_import_full(state: &DaemonState, params: &serde_json::Value) -> 
 
     // Restore credentials
     for (server_id, pwd) in &export_data.passwords {
-        let key = vps_guard_credential::make_key(server_id, vps_guard_credential::cred_type::PASSWORD);
+        let key = termfast_credential::make_key(server_id, termfast_credential::cred_type::PASSWORD);
         let _ = state.credential_store.save(&key, pwd);
     }
     for (server_id, pass) in &export_data.key_passphrases {
-        let key = vps_guard_credential::make_key(server_id, vps_guard_credential::cred_type::KEY_PASSPHRASE);
+        let key = termfast_credential::make_key(server_id, termfast_credential::cred_type::KEY_PASSPHRASE);
         let _ = state.credential_store.save(&key, pass);
     }
     // Restore key files
@@ -1533,9 +1533,9 @@ async fn handle_cleanup_authorized_keys(state: &DaemonState, params: &serde_json
         let key_name = std::path::Path::new(key_path)
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("vps-guard");
+            .unwrap_or("termfast");
         let cmd = format!(
-            "sed -i '/# vps-guard: {}/d' ~/.ssh/authorized_keys 2>/dev/null || true",
+            "sed -i '/# termfast: {}/d' ~/.ssh/authorized_keys 2>/dev/null || true",
             key_name
         );
         let _ = server.ssh_client.exec(&cmd, 10).await;
@@ -1609,7 +1609,7 @@ async fn handle_set_proxy_auth(state: &DaemonState, params: &serde_json::Value) 
         .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing password"))?;
 
     let cred_value = format!("{}:{}", username, password);
-    let key = vps_guard_credential::make_key(server_id, "proxy_auth");
+    let key = termfast_credential::make_key(server_id, "proxy_auth");
     state.credential_store.save(&key, &cred_value).map_err(|e| {
         IpcError::new(ErrorCode::Internal, format!("proxy auth save error: {}", e))
     })?;
@@ -1623,7 +1623,7 @@ async fn handle_clear_proxy_auth(state: &DaemonState, params: &serde_json::Value
         .as_str()
         .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing server_id"))?;
 
-    let key = vps_guard_credential::make_key(server_id, "proxy_auth");
+    let key = termfast_credential::make_key(server_id, "proxy_auth");
     state.credential_store.delete(&key).map_err(|e| {
         IpcError::new(ErrorCode::Internal, format!("proxy auth delete error: {}", e))
     })?;
@@ -1636,7 +1636,7 @@ async fn handle_add_trigger(state: &DaemonState, params: &serde_json::Value) -> 
     let server_id = params["server_id"]
         .as_str()
         .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing server_id"))?;
-    let trigger: vps_guard_core::config::TriggerInstance =
+    let trigger: termfast_core::config::TriggerInstance =
         serde_json::from_value(params["trigger"].clone()).map_err(|e| {
             IpcError::new(ErrorCode::InvalidParams, format!("invalid trigger: {}", e))
         })?;
@@ -1744,7 +1744,7 @@ async fn handle_update_trigger(state: &DaemonState, params: &serde_json::Value) 
                     trigger.name = name.to_string();
                 }
                 if let Some(trigger_type) = params["trigger_type"].as_str() {
-                    if let Ok(t) = serde_json::from_str::<vps_guard_core::config::TriggerType>(
+                    if let Ok(t) = serde_json::from_str::<termfast_core::config::TriggerType>(
                         &format!("\"{}\"", trigger_type),
                     ) {
                         trigger.trigger_type = t;
@@ -1845,7 +1845,7 @@ async fn handle_sync_trigger_from_template(state: &DaemonState, params: &serde_j
 
 /// Create a new trigger template
 async fn handle_create_template(state: &DaemonState, params: &serde_json::Value) -> HandlerResult {
-    let template: vps_guard_core::config::TriggerTemplate =
+    let template: termfast_core::config::TriggerTemplate =
         serde_json::from_value(params["template"].clone()).map_err(|e| {
             IpcError::new(ErrorCode::InvalidParams, format!("invalid template: {}", e))
         })?;
@@ -1928,7 +1928,7 @@ async fn handle_save_trigger_as_template(state: &DaemonState, params: &serde_jso
     let mut new_template_id = String::new();
     mgr.modify(|config| {
         // First, look up trigger type from template (immutable borrow)
-        let trigger_info: Option<(Vec<String>, u64, vps_guard_core::config::TriggerType)> = config
+        let trigger_info: Option<(Vec<String>, u64, termfast_core::config::TriggerType)> = config
             .find_server(server_id)
             .and_then(|srv| srv.triggers.iter().find(|t| t.id == trigger_id))
             .map(|trigger| {
@@ -1940,7 +1940,7 @@ async fn handle_save_trigger_as_template(state: &DaemonState, params: &serde_jso
         if let Some((commands, timeout, trigger_type)) = trigger_info {
             let new_id = format!("tmpl_{}", uuid_v4_simple());
             new_template_id = new_id.clone();
-            let template = vps_guard_core::config::TriggerTemplate {
+            let template = termfast_core::config::TriggerTemplate {
                 id: new_id,
                 name: template_name.to_string(),
                 trigger_type,
@@ -1962,7 +1962,7 @@ async fn handle_save_trigger_as_template(state: &DaemonState, params: &serde_jso
 
 /// Import templates (merge into existing)
 async fn handle_import_templates(state: &DaemonState, params: &serde_json::Value) -> HandlerResult {
-    let templates: Vec<vps_guard_core::config::TriggerTemplate> =
+    let templates: Vec<termfast_core::config::TriggerTemplate> =
         serde_json::from_value(params["templates"].clone()).map_err(|e| {
             IpcError::new(ErrorCode::InvalidParams, format!("invalid templates: {}", e))
         })?;
@@ -2005,7 +2005,7 @@ async fn handle_configure_key_auth(state: &DaemonState, params: &serde_json::Val
     // Save passphrase to credential store if provided
     if let Some(pass) = passphrase {
         if !pass.is_empty() {
-            let key = vps_guard_credential::make_key(server_id, vps_guard_credential::cred_type::KEY_PASSPHRASE);
+            let key = termfast_credential::make_key(server_id, termfast_credential::cred_type::KEY_PASSPHRASE);
             state.credential_store.save(&key, pass).map_err(|e| {
                 IpcError::new(ErrorCode::Internal, format!("passphrase save error: {}", e))
             })?;
@@ -2048,13 +2048,13 @@ async fn handle_switch_auth_method(state: &DaemonState, params: &serde_json::Val
     // Clean up credentials that are no longer needed
     if old_method == "password" && auth_method == "key" {
         // Switching password → key: delete password from keychain
-        let pwd_key = vps_guard_credential::make_key(server_id, vps_guard_credential::cred_type::PASSWORD);
+        let pwd_key = termfast_credential::make_key(server_id, termfast_credential::cred_type::PASSWORD);
         let _ = state.credential_store.delete(&pwd_key);
         log_and_broadcast(state, Some(server_id), LogLevel::Info, LogKind::System,
             "Switched to key auth, removed password from keychain".to_string()).await;
     } else if old_method == "key" && auth_method == "password" {
         // Switching key → password: delete key passphrase from keychain
-        let pass_key = vps_guard_credential::make_key(server_id, vps_guard_credential::cred_type::KEY_PASSPHRASE);
+        let pass_key = termfast_credential::make_key(server_id, termfast_credential::cred_type::KEY_PASSPHRASE);
         let _ = state.credential_store.delete(&pass_key);
         log_and_broadcast(state, Some(server_id), LogLevel::Info, LogKind::System,
             "Switched to password auth, removed key passphrase from keychain".to_string()).await;
@@ -2076,7 +2076,7 @@ async fn handle_detect_firewall(state: &DaemonState, params: &serde_json::Value)
     let handle = server.ssh_client.get_handle().await
         .ok_or_else(|| IpcError::new(ErrorCode::Internal, "no SSH connection — connect first"))?;
 
-    use vps_guard_core::ssh::exec;
+    use termfast_core::ssh::exec;
 
     // Check firewalld
     let result = exec::exec(&handle, "systemctl is-active firewalld 2>/dev/null", 10).await?;
@@ -2145,27 +2145,27 @@ fn uuid_v4_simple() -> String {
 
 /// Get trigger type from a template ID
 fn get_trigger_type_from_template(
-    config: &vps_guard_core::config::Config,
+    config: &termfast_core::config::Config,
     template_id: &str,
-) -> vps_guard_core::config::TriggerType {
+) -> termfast_core::config::TriggerType {
     config
         .find_template(template_id)
         .map(|t| t.trigger_type.clone())
-        .unwrap_or(vps_guard_core::config::TriggerType::ManualFire)
+        .unwrap_or(termfast_core::config::TriggerType::ManualFire)
 }
 
 // === SECTION 6 END ===
 
-impl From<vps_guard_core::Error> for IpcError {
-    fn from(e: vps_guard_core::Error) -> Self {
+impl From<termfast_core::Error> for IpcError {
+    fn from(e: termfast_core::Error) -> Self {
         match e {
-            vps_guard_core::Error::Ipc(ipc) => IpcError::new(ipc.code, ipc.detail),
-            vps_guard_core::Error::Config(msg) => IpcError::new(ErrorCode::Internal, msg),
-            vps_guard_core::Error::Ssh(msg) => IpcError::new(ErrorCode::SshConnectFailed, msg),
-            vps_guard_core::Error::Io(e) => IpcError::new(ErrorCode::Internal, e.to_string()),
-            vps_guard_core::Error::Crypto(msg) => IpcError::new(ErrorCode::Internal, msg),
-            vps_guard_core::Error::Serde(e) => IpcError::new(ErrorCode::Internal, e.to_string()),
-            vps_guard_core::Error::Other(msg) => IpcError::new(ErrorCode::Internal, msg),
+            termfast_core::Error::Ipc(ipc) => IpcError::new(ipc.code, ipc.detail),
+            termfast_core::Error::Config(msg) => IpcError::new(ErrorCode::Internal, msg),
+            termfast_core::Error::Ssh(msg) => IpcError::new(ErrorCode::SshConnectFailed, msg),
+            termfast_core::Error::Io(e) => IpcError::new(ErrorCode::Internal, e.to_string()),
+            termfast_core::Error::Crypto(msg) => IpcError::new(ErrorCode::Internal, msg),
+            termfast_core::Error::Serde(e) => IpcError::new(ErrorCode::Internal, e.to_string()),
+            termfast_core::Error::Other(msg) => IpcError::new(ErrorCode::Internal, msg),
         }
     }
 }
@@ -2280,11 +2280,11 @@ async fn handle_terminal_resize(state: &DaemonState, params: &serde_json::Value)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vps_guard_core::config::Config;
+    use termfast_core::config::Config;
 
     fn test_state() -> DaemonState {
         let config = Config::default();
-        let mgr = vps_guard_core::config::ConfigManager::new(config);
+        let mgr = termfast_core::config::ConfigManager::new(config);
         DaemonState::new(mgr)
     }
 

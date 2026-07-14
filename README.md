@@ -144,7 +144,7 @@ npm run tauri build
 ## 项目结构
 
 ```
-ssh-proxy/
+termfast/
 ├── src/          # 前端界面与组件
 ├── src-tauri/    # Tauri 应用入口
 ├── crates/       # Rust 核心库（SSH、代理、触发器等）

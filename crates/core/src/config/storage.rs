@@ -31,7 +31,7 @@ impl FileConfigStorage {
 
     /// Create with platform default path
     pub fn default_path() -> Result<PathBuf> {
-        let proj_dir = directories::ProjectDirs::from("", "", "vps-guard")
+        let proj_dir = directories::ProjectDirs::from("", "", "termfast")
             .ok_or_else(|| Error::Config("cannot determine config directory".into()))?;
         let data_dir = proj_dir.data_dir();
         Ok(data_dir.join("config.json"))

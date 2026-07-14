@@ -3,8 +3,8 @@
 //! Connects to the daemon via Unix socket and sends/receives IPC messages.
 
 use anyhow::{bail, Result};
-use vps_guard_daemon::frame;
-use vps_guard_daemon::{Action, Request, Response};
+use termfast_daemon::frame;
+use termfast_daemon::{Action, Request, Response};
 
 /// CLI daemon client
 pub struct DaemonClient {
@@ -15,12 +15,12 @@ pub struct DaemonClient {
 impl DaemonClient {
     /// Connect to the running daemon
     pub async fn connect() -> Result<Self> {
-        let socket_path = vps_guard_daemon::find_daemon_socket()
+        let socket_path = termfast_daemon::find_daemon_socket()
             .map_err(|e| anyhow::anyhow!("failed to find daemon socket: {}", e))?;
 
         let socket_path = match socket_path {
             Some(path) => path,
-            None => bail!("daemon is not running. Start it with `vps-guard --daemon` or launch the GUI"),
+            None => bail!("daemon is not running. Start it with `termfast --daemon` or launch the GUI"),
         };
 
         #[cfg(unix)]

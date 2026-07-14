@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-/// Magic bytes for VPS Guard encrypted blob format
+/// Magic bytes for TermFast encrypted blob format
 const MAGIC: &[u8; 4] = b"VPG1";
 
 /// Salt length for Argon2id

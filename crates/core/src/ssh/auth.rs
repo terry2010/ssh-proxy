@@ -101,8 +101,8 @@ pub fn generate_keypair(server_id: &str) -> Result<(PathBuf, String, String)> {
     let ssh_dir = home.home_dir().join(".ssh");
     std::fs::create_dir_all(&ssh_dir).map_err(Error::Io)?;
 
-    let key_path = ssh_dir.join(format!("vps_guard_{}_key", server_id));
-    let pub_key_path = ssh_dir.join(format!("vps_guard_{}_key.pub", server_id));
+    let key_path = ssh_dir.join(format!("termfast_{}_key", server_id));
+    let pub_key_path = ssh_dir.join(format!("termfast_{}_key.pub", server_id));
 
     // Generate Ed25519 key using russh's re-exported ssh_key
     use russh::keys::ssh_key;
@@ -131,7 +131,7 @@ pub fn generate_keypair(server_id: &str) -> Result<(PathBuf, String, String)> {
     // Write public key
     let public_key = key_pair.public_key();
     let pub_key_str = format!(
-        "{} vps-guard@{}",
+        "{} termfast@{}",
         public_key
             .to_openssh()
             .map_err(|e| Error::Crypto(format!("pubkey encode failed: {}", e)))?,

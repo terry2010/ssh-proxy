@@ -17,7 +17,7 @@ impl ConfigManager {
     pub fn new(config: Config) -> Self {
         let storage = FileConfigStorage::new(
             directories::BaseDirs::new()
-                .map(|d| d.config_dir().join("vps-guard").join("config.json"))
+                .map(|d| d.config_dir().join("termfast").join("config.json"))
                 .unwrap_or_else(|| std::path::PathBuf::from("config.json")),
         );
         Self {

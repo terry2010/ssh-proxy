@@ -78,9 +78,9 @@ export function useDaemonEvents() {
         const serverName = useServerStore.getState().servers.find((s) => s.id === data.server_id)?.name || data.server_id;
         if (cfg) {
           if (data.status === "connected" && cfg.general.notify_connect_success) {
-            notify("VPS Guard", `Server "${serverName}" connected successfully`);
+            notify("TermFast", `Server "${serverName}" connected successfully`);
           } else if (data.status === "disconnected" && cfg.general.notify_disconnect) {
-            notify("VPS Guard", `Server "${serverName}" disconnected`);
+            notify("TermFast", `Server "${serverName}" disconnected`);
           } else if (data.status === "connected" && cfg.general.notify_reconnect_success) {
             // Could distinguish reconnect from initial connect in future
           }
@@ -96,7 +96,7 @@ export function useDaemonEvents() {
         const cfg = useConfigStore.getState().config;
         if (cfg?.general.notify_proxy_toggle) {
           const serverName = useServerStore.getState().servers.find((s) => s.id === data.server_id)?.name || data.server_id;
-          notify("VPS Guard", `Proxy ${data.proxy_enabled ? "enabled" : "disabled"} on "${serverName}"`);
+          notify("TermFast", `Proxy ${data.proxy_enabled ? "enabled" : "disabled"} on "${serverName}"`);
         }
       }
     );
@@ -148,9 +148,9 @@ export function useDaemonEvents() {
       const cfg = useConfigStore.getState().config;
       if (cfg) {
         if (!data.success && cfg.general.notify_trigger_fail) {
-          notify("VPS Guard — Trigger Failed", `Trigger "${data.trigger_name || data.trigger_id}" failed (${data.executed_commands}/${data.total_commands})`);
+          notify("TermFast — Trigger Failed", `Trigger "${data.trigger_name || data.trigger_id}" failed (${data.executed_commands}/${data.total_commands})`);
         } else if (data.success && cfg.general.notify_trigger_success) {
-          notify("VPS Guard — Trigger Succeeded", `Trigger "${data.trigger_name || data.trigger_id}" succeeded (${data.executed_commands}/${data.total_commands})`);
+          notify("TermFast — Trigger Succeeded", `Trigger "${data.trigger_name || data.trigger_id}" succeeded (${data.executed_commands}/${data.total_commands})`);
         }
       }
       const state = useTriggerStore.getState();
@@ -286,7 +286,7 @@ export function useDaemonEvents() {
       // 3. Tray icon red — handled by GlobalIndicator listening to this event
       const cfg = useConfigStore.getState().config;
       if (cfg?.general.notify_auth_fail) {
-        notify("VPS Guard — Security Alert", `HostKey mismatch on server ${data.server_id}. Possible MITM attack!`);
+        notify("TermFast — Security Alert", `HostKey mismatch on server ${data.server_id}. Possible MITM attack!`);
       }
     });
 

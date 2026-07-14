@@ -6,6 +6,6 @@ import { TitleBar } from "@/components/desktop/TitleBar";
 describe("TitleBar", () => {
   it("renders title bar with app name", () => {
     render(<TitleBar />);
-    expect(screen.getByText(/VPS Guard/i)).toBeInTheDocument();
+    expect(screen.getByText(/TermFast/i)).toBeInTheDocument();
   });
 });

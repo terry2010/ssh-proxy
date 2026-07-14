@@ -79,23 +79,48 @@ edit(file_path="big_file.rs", old_string="// === SECTION 2 END ===",
 ### 架构
 
 - 使用 `tauri-plugin-updater` 实现自动更新
-- 签名密钥：`~/.tauri/ai-subtrans.key`（私钥）+ `tauri.conf.json` 里的 `pubkey`（公钥）
+- 签名密钥：`~/.tauri/termfast-signing.key`（私钥）+ `tauri.conf.json` 里的 `pubkey`（公钥）
 - 更新清单：`latest.json` 托管在 GitHub Pages（`gh-pages` 分支）
 - 安装包存储：GitHub Releases
 - 国内加速：`latest.json` 里的 URL 用 `gh-proxy.com` 前缀
 
+### 首次配置（每个仓库只需一次）
+
+1. 生成签名密钥对（已执行，私钥已保存到本地）：
+   ```bash
+   npx tauri signer generate --ci -w ~/.tauri/termfast-signing.key
+   ```
+2. 将 **私钥内容** 添加到 GitHub 仓库 Secret：
+   - 名称：`TAURI_SIGNING_PRIVATE_KEY`
+   - 值：`cat ~/.tauri/termfast-signing.key` 的完整内容
+3. 确认 `src-tauri/tauri.conf.json` 中 `plugins.updater.endpoints` 指向你的 GitHub Pages 地址。
+4. 在仓库 **Settings → Pages** 中启用 GitHub Pages，Source 选择 `Deploy from a branch`，Branch 选择 `gh-pages`。
+
 ### 发布流程
 
-```
-node scripts/publish.mjs <版本号> "更新内容"
-```
+1. 同步版本号（必须保持一致）：
+   - `package.json`
+   - `src-tauri/tauri.conf.json`
+   - `src-tauri/Cargo.toml`
+   - `Cargo.toml`（workspace version）
+2. 提交并推送版本号改动。
+3. 打 tag 并推送，触发 GitHub Actions：
+   ```bash
+   git tag v0.1.0
+   git push origin v0.1.0
+   ```
+4. `.github/workflows/release.yml` 自动完成：
+   - 在 Windows + macOS  runner 上构建安装包
+   - 用 `TAURI_SIGNING_PRIVATE_KEY` 对更新包签名
+   - 创建 GitHub Release（草稿 → 自动发布）
+   - 从 Release Asset 中读取 `.sig` 文件
+   - 生成 `latest.json` 并部署到 `gh-pages` 分支
 
-脚本自动完成：改版本号 → 带签名构建 → 创建 GitHub Release → 上传 .exe + .sig → 更新 latest.json
+### 环境变量 / Secrets
 
-### 环境变量
-
-- `GITHUB_TOKEN`：GitHub Personal Access Token（repo 权限）
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：私钥密码
+- `GITHUB_TOKEN`：Actions 自动提供，无需手动设置
+- `TAURI_SIGNING_PRIVATE_KEY`：GitHub Secret，私钥内容
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：当前无密码，可留空
 
 ### 客户端行为
 
@@ -107,9 +132,9 @@ node scripts/publish.mjs <版本号> "更新内容"
 
 ### 注意事项
 
-- 私钥丢了就无法发布更新，务必备份
-- `TAURI_SIGNING_PRIVATE_KEY` 需要传私钥内容（不是路径），脚本会自动读取文件
-- `--build-only` 参数可只构建不发布（本地测试用）
+- 私钥丢了就无法发布更新，务必备份 `~/.tauri/termfast-signing.key`
+- 当前 CI 不配置 Apple Developer ID / Windows EV 代码签名证书，安装包首次打开会有系统安全提示，属正常行为
+- 发布前确保四个版本号文件一致，否则自动更新会失败
 
 ## 构建与测试命令
 

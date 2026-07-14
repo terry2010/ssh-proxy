@@ -1,5 +1,5 @@
 [package]
-name = "vps-guard-test-utils"
+name = "termfast-test-utils"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
