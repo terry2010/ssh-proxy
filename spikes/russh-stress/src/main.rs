@@ -4,7 +4,7 @@
 //! S1-S9 test scenarios from design doc §20.0.
 //!
 //! Usage:
-//!   VPS_GUARD_TEST_HOST=1.2.3.4 VPS_GUARD_TEST_USER=root VPS_GUARD_TEST_PASS=xxx \
+//!   TERMFAST_TEST_HOST=1.2.3.4 TERMFAST_TEST_USER=root TERMFAST_TEST_PASS=xxx \
 //!   cargo run --bin russh-stress -- --scenario S1
 
 use anyhow::Result;
@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
     println!("scenario: {}", args.scenario);
 
     // Start mock SSH server if no real VPS is configured
-    let using_real_vps = env::var("VPS_GUARD_TEST_HOST").is_ok();
+    let using_real_vps = env::var("TERMFAST_TEST_HOST").is_ok();
     if !using_real_vps {
         println!("starting mock SSH server on port {}", args.mock_port);
         let mock_addr = format!("127.0.0.1:{}", args.mock_port);
@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         println!("mock SSH server started");
     } else {
-        println!("using real VPS from VPS_GUARD_TEST_HOST");
+        println!("using real VPS from TERMFAST_TEST_HOST");
     }
     println!();
 
@@ -91,10 +91,10 @@ async fn main() -> Result<()> {
 
 /// Get VPS test credentials from environment
 pub fn get_test_credentials() -> Option<TestCreds> {
-    let host = env::var("VPS_GUARD_TEST_HOST").ok()?;
-    let port = env::var("VPS_GUARD_TEST_PORT").ok().unwrap_or_else(|| "22".into());
-    let user = env::var("VPS_GUARD_TEST_USER").ok().unwrap_or_else(|| "root".into());
-    let pass = env::var("VPS_GUARD_TEST_PASS").ok()?;
+    let host = env::var("TERMFAST_TEST_HOST").ok()?;
+    let port = env::var("TERMFAST_TEST_PORT").ok().unwrap_or_else(|| "22".into());
+    let user = env::var("TERMFAST_TEST_USER").ok().unwrap_or_else(|| "root".into());
+    let pass = env::var("TERMFAST_TEST_PASS").ok()?;
     Some(TestCreds { host, port: port.parse().unwrap_or(22), user, pass })
 }
 

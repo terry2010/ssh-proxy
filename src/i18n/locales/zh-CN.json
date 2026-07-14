@@ -1,6 +1,6 @@
 {
   "app": {
-    "name": "VPS Guard",
+    "name": "TermFast",
     "version": "版本"
   },
   "common": {
@@ -305,11 +305,19 @@
     },
     "about": {
       "title": "关于",
-      "check_update": "检查更新"
+      "check_update": "检查更新",
+      "checking": "正在检查更新...",
+      "latest": "已是最新版本",
+      "failed": "检查更新失败",
+      "available": "发现新版本：{{version}}",
+      "installing": "正在下载更新...",
+      "installed": "更新已安装，重启后生效",
+      "confirm": "是否安装更新 {{version}}？",
+      "install": "安装"
     }
   },
   "onboarding": {
-    "welcome": "欢迎使用 VPS Guard",
+    "welcome": "欢迎使用 TermFast",
     "quick_mode": "快速模式",
     "advanced_mode": "高级模式",
     "skip": "跳过向导",

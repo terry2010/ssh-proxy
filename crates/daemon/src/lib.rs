@@ -1,4 +1,4 @@
-//! VPS Guard Daemon — socket server + core runtime holder
+//! TermFast Daemon — socket server + core runtime holder
 //!
 //! Can be embedded in Tauri (GUI mode) or run standalone (--daemon mode).
 

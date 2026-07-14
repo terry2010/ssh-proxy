@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "VPS Guard",
+  "productName": "TermFast",
   "version": "0.1.0",
-  "identifier": "com.vpsguard.app",
+  "identifier": "com.termfast.app",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "VPS Guard",
+        "title": "TermFast",
         "width": 1200,
         "height": 800,
         "minWidth": 800,
@@ -42,8 +42,19 @@
     "externalBin": [],
     "copyright": "",
     "category": "DeveloperTool",
-    "shortDescription": "SSH proxy manager with auto firewall updates",
-    "longDescription": "VPS Guard manages SSH tunnels, SOCKS5/HTTP proxies, and automatic firewall rule updates when your IP changes."
+    "shortDescription": "A fast SSH terminal with proxy and automation",
+    "longDescription": "TermFast is a fast SSH terminal with built-in SOCKS5/HTTP proxy and automation triggers for firewall updates and service recovery."
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://terry2010.github.io/termfast/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE4MkFCOEIzQTA0OTg0NDQKUldSRWhFbWdzN2dxR0VEdGdqckhWd0daWHFXTXlOcFJKVTFXeGQzZW9FMysvYm41VklBSnpkdmUK",
+      "windows": {
+        "installMode": "basicUi"
+      }
+    }
+  }
 }

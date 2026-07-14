@@ -16,15 +16,15 @@ pub type EventForwarder = Box<dyn Fn(&str, serde_json::Value) + Send + Sync>;
 /// Daemon runtime state — shared across all client connections
 pub struct DaemonState {
     /// Server manager
-    pub server_manager: Arc<vps_guard_core::server::ServerManager>,
+    pub server_manager: Arc<termfast_core::server::ServerManager>,
     /// Log buffer
-    pub log_buffer: Arc<vps_guard_core::log::LogBuffer>,
+    pub log_buffer: Arc<termfast_core::log::LogBuffer>,
     /// Config manager
-    pub config_manager: Arc<Mutex<vps_guard_core::config::ConfigManager>>,
+    pub config_manager: Arc<Mutex<termfast_core::config::ConfigManager>>,
     /// Credential store
-    pub credential_store: Arc<dyn vps_guard_credential::CredentialStore>,
+    pub credential_store: Arc<dyn termfast_credential::CredentialStore>,
     /// System proxy adapter (platform-specific)
-    pub proxy_adapter: Arc<dyn vps_guard_core::platform::SystemProxyAdapter>,
+    pub proxy_adapter: Arc<dyn termfast_core::platform::SystemProxyAdapter>,
     /// Connected clients for event broadcasting
     pub clients: Arc<Mutex<Vec<ClientHandle>>>,
     /// Shutdown signal
@@ -32,7 +32,7 @@ pub struct DaemonState {
     /// Event forwarder — called on every broadcast to forward events to the GUI (FP-6.2)
     event_forwarder: Arc<std::sync::Mutex<Option<EventForwarder>>>,
     /// Runtime state manager for last_known_ip persistence (FP-1.3b)
-    pub runtime_state: Arc<vps_guard_core::config::RuntimeStateManager>,
+    pub runtime_state: Arc<termfast_core::config::RuntimeStateManager>,
     /// Terminal session manager — interactive SSH terminals
     pub terminal_manager: Arc<crate::terminal::TerminalManager>,
 }
@@ -44,34 +44,34 @@ pub struct ClientHandle {
 }
 
 impl DaemonState {
-    pub fn new(config_manager: vps_guard_core::config::ConfigManager) -> Self {
+    pub fn new(config_manager: termfast_core::config::ConfigManager) -> Self {
         Self::with_credential_store(
             config_manager,
-            Arc::new(vps_guard_credential::InMemoryCredentialStore::new()),
+            Arc::new(termfast_credential::InMemoryCredentialStore::new()),
         )
     }
 
     pub fn with_credential_store(
-        config_manager: vps_guard_core::config::ConfigManager,
-        credential_store: Arc<dyn vps_guard_credential::CredentialStore>,
+        config_manager: termfast_core::config::ConfigManager,
+        credential_store: Arc<dyn termfast_credential::CredentialStore>,
     ) -> Self {
         Self::with_adapter(
             config_manager,
             credential_store,
-            Arc::new(vps_guard_core::platform::NoopSystemProxyAdapter),
+            Arc::new(termfast_core::platform::NoopSystemProxyAdapter),
         )
     }
 
     pub fn with_adapter(
-        config_manager: vps_guard_core::config::ConfigManager,
-        credential_store: Arc<dyn vps_guard_credential::CredentialStore>,
-        proxy_adapter: Arc<dyn vps_guard_core::platform::SystemProxyAdapter>,
+        config_manager: termfast_core::config::ConfigManager,
+        credential_store: Arc<dyn termfast_credential::CredentialStore>,
+        proxy_adapter: Arc<dyn termfast_core::platform::SystemProxyAdapter>,
     ) -> Self {
         let event_forwarder: Arc<std::sync::Mutex<Option<EventForwarder>>> =
             Arc::new(std::sync::Mutex::new(None));
         Self {
-            server_manager: Arc::new(vps_guard_core::server::ServerManager::new()),
-            log_buffer: Arc::new(vps_guard_core::log::LogBuffer::new(10000)),
+            server_manager: Arc::new(termfast_core::server::ServerManager::new()),
+            log_buffer: Arc::new(termfast_core::log::LogBuffer::new(10000)),
             config_manager: Arc::new(Mutex::new(config_manager)),
             credential_store,
             proxy_adapter,
@@ -80,17 +80,17 @@ impl DaemonState {
             event_forwarder: event_forwarder.clone(),
             terminal_manager: Arc::new(crate::terminal::TerminalManager::new(event_forwarder)),
             runtime_state: Arc::new(
-                vps_guard_core::config::RuntimeStateManager::with_default_path()
+                termfast_core::config::RuntimeStateManager::with_default_path()
                     .unwrap_or_else(|e| {
                         tracing::warn!("failed to init runtime_state: {}, using temp", e);
-                        vps_guard_core::config::RuntimeStateManager::new("runtime_state.json")
+                        termfast_core::config::RuntimeStateManager::new("runtime_state.json")
                     }),
             ),
         }
     }
 
     /// Set a custom runtime state manager (for testing)
-    pub fn with_runtime_state(mut self, rs: Arc<vps_guard_core::config::RuntimeStateManager>) -> Self {
+    pub fn with_runtime_state(mut self, rs: Arc<termfast_core::config::RuntimeStateManager>) -> Self {
         self.runtime_state = rs;
         self
     }
@@ -214,7 +214,7 @@ impl DaemonServer {
         #[cfg(windows)]
         {
             use tokio::net::windows::named_pipe::ServerOptions;
-            let pipe_name = r"\\.\pipe\vps-guard-daemon".to_string();
+            let pipe_name = r"\\.\pipe\termfast-daemon".to_string();
 
             tracing::info!("daemon listening on {}", pipe_name);
 
@@ -390,7 +390,7 @@ impl Drop for DaemonServer {
 fn get_socket_path() -> anyhow::Result<PathBuf> {
     let dirs = directories::BaseDirs::new()
         .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?;
-    let cache_dir = dirs.cache_dir().join("vps-guard");
+    let cache_dir = dirs.cache_dir().join("termfast");
     std::fs::create_dir_all(&cache_dir)?;
     Ok(cache_dir.join("daemon.sock"))
 }
@@ -692,16 +692,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_daemon_state_creation() {
-        let config = vps_guard_core::config::Config::default();
-        let mgr = vps_guard_core::config::ConfigManager::new(config);
+        let config = termfast_core::config::Config::default();
+        let mgr = termfast_core::config::ConfigManager::new(config);
         let state = DaemonState::new(mgr);
         assert_eq!(state.clients.lock().await.len(), 0);
     }
 
     #[tokio::test]
     async fn test_broadcast_no_clients() {
-        let config = vps_guard_core::config::Config::default();
-        let mgr = vps_guard_core::config::ConfigManager::new(config);
+        let config = termfast_core::config::Config::default();
+        let mgr = termfast_core::config::ConfigManager::new(config);
         let state = DaemonState::new(mgr);
         // Should not panic with no clients
         state.broadcast("test:event", serde_json::json!({})).await;

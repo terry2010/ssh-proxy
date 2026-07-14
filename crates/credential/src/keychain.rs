@@ -141,7 +141,7 @@ impl CredentialStore for KeychainCredentialStore {
     }
 
     fn delete_all_for_server(&self, server_id: &str) -> Result<()> {
-        // Key naming: vps-guard::<server_id>::<type>
+        // Key naming: termfast::<server_id>::<type>
         // Known credential types
         let cred_types = ["password", "key_passphrase"];
         for ct in cred_types {

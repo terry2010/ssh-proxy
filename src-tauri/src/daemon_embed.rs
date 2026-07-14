@@ -6,11 +6,11 @@
 //! Starts NetworkMonitor for offline detection (FP-6.9).
 
 use std::sync::Arc;
-use vps_guard_core::config::migration::load_config_with_migration;
-use vps_guard_core::config::{Config, ConfigManager, FileConfigStorage};
-use vps_guard_core::platform::{SystemProxyAdapter, SystemProxyConfig, SetProxyResult};
-use vps_guard_credential::KeychainCredentialStore;
-use vps_guard_daemon::{DaemonServer, DaemonState};
+use termfast_core::config::migration::load_config_with_migration;
+use termfast_core::config::{Config, ConfigManager, FileConfigStorage};
+use termfast_core::platform::{SystemProxyAdapter, SystemProxyConfig, SetProxyResult};
+use termfast_credential::KeychainCredentialStore;
+use termfast_daemon::{DaemonServer, DaemonState};
 
 /// Embedded daemon handle
 pub struct EmbeddedDaemon {
@@ -98,13 +98,13 @@ impl EmbeddedDaemon {
         }
 
         // Start network monitor for offline detection (FP-6.9)
-        let monitor = Arc::new(vps_guard_desktop::network::NetworkMonitor::new());
+        let monitor = Arc::new(termfast_desktop::network::NetworkMonitor::new());
         let state_clone = server.state().clone();
         let monitor_task = monitor.start_monitoring(5, move |new_state, servers_to_reconnect| {
             let state = state_clone.clone();
             tokio::spawn(async move {
                 match new_state {
-                    vps_guard_desktop::network::NetworkState::Offline => {
+                    termfast_desktop::network::NetworkState::Offline => {
                         tracing::warn!("network offline — pausing reconnection");
                         let servers = state.server_manager.list_servers().await;
                         let mut connected = Vec::new();
@@ -118,7 +118,7 @@ impl EmbeddedDaemon {
                             "connected_servers": connected,
                         })).await;
                     }
-                    vps_guard_desktop::network::NetworkState::Online => {
+                    termfast_desktop::network::NetworkState::Online => {
                         tracing::info!("network online — {} servers should reconnect", servers_to_reconnect.len());
                         // Broadcast online event — frontend/ServerInstance will handle reconnection
                         state.broadcast("network:online", serde_json::json!({
@@ -160,8 +160,8 @@ struct DesktopProxyAdapter;
 #[async_trait::async_trait]
 impl SystemProxyAdapter for DesktopProxyAdapter {
     async fn set_system_proxy(&self, config: &SystemProxyConfig) -> anyhow::Result<SetProxyResult> {
-        let adapter = vps_guard_desktop::platform::get_platform_adapter();
-        let desktop_config = vps_guard_desktop::platform::SystemProxyConfig {
+        let adapter = termfast_desktop::platform::get_platform_adapter();
+        let desktop_config = termfast_desktop::platform::SystemProxyConfig {
             server_id: config.server_id.clone(),
             socks5_port: config.socks5_port,
             http_port: config.http_port,
@@ -175,7 +175,7 @@ impl SystemProxyAdapter for DesktopProxyAdapter {
     }
 
     async fn clear_system_proxy(&self) -> anyhow::Result<SetProxyResult> {
-        let adapter = vps_guard_desktop::platform::get_platform_adapter();
+        let adapter = termfast_desktop::platform::get_platform_adapter();
         let result = adapter.clear_system_proxy().await?;
         Ok(SetProxyResult {
             needs_privilege: result.needs_privilege,
@@ -185,7 +185,7 @@ impl SystemProxyAdapter for DesktopProxyAdapter {
     }
 
     async fn get_system_proxy(&self) -> anyhow::Result<Option<SystemProxyConfig>> {
-        let adapter = vps_guard_desktop::platform::get_platform_adapter();
+        let adapter = termfast_desktop::platform::get_platform_adapter();
         let result = adapter.get_system_proxy().await?;
         Ok(result.map(|c| SystemProxyConfig {
             server_id: c.server_id,

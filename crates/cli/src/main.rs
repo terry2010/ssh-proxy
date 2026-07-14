@@ -1,4 +1,4 @@
-//! VPS Guard CLI — FP-6.3
+//! TermFast CLI — FP-6.3
 //!
 //! Command-line interface that connects to the daemon via socket.
 
@@ -7,10 +7,10 @@ mod client;
 use clap::{Parser, Subcommand};
 use client::DaemonClient;
 use std::path::PathBuf;
-use vps_guard_daemon::{Action, Response};
+use termfast_daemon::{Action, Response};
 
 #[derive(Parser)]
-#[command(name = "vps-guard", version, about = "VPS Guard CLI")]
+#[command(name = "termfast", version, about = "TermFast CLI")]
 struct Cli {
     /// Specify config file path (only used with --daemon)
     #[arg(long, global = true)]
@@ -179,15 +179,15 @@ fn classify_error(e: &anyhow::Error) -> ExitCode {
         return ExitCode::ConfigOrDaemon;
     }
     // Check for IpcError with specific ErrorCode
-    if let Some(ipc_err) = e.downcast_ref::<vps_guard_core::error::IpcError>() {
+    if let Some(ipc_err) = e.downcast_ref::<termfast_core::error::IpcError>() {
         return match ipc_err.code {
-            vps_guard_core::error::ErrorCode::AuthFailed => ExitCode::AuthFailed,
-            vps_guard_core::error::ErrorCode::SshConnectFailed
-            | vps_guard_core::error::ErrorCode::SshDisconnected => ExitCode::ConnectFailed,
-            vps_guard_core::error::ErrorCode::TriggerCommandFailed => ExitCode::TriggerFailed,
-            vps_guard_core::error::ErrorCode::ConfigCorrupt
-            | vps_guard_core::error::ErrorCode::ConfigMigrationFailed
-            | vps_guard_core::error::ErrorCode::InvalidParams => ExitCode::ConfigOrDaemon,
+            termfast_core::error::ErrorCode::AuthFailed => ExitCode::AuthFailed,
+            termfast_core::error::ErrorCode::SshConnectFailed
+            | termfast_core::error::ErrorCode::SshDisconnected => ExitCode::ConnectFailed,
+            termfast_core::error::ErrorCode::TriggerCommandFailed => ExitCode::TriggerFailed,
+            termfast_core::error::ErrorCode::ConfigCorrupt
+            | termfast_core::error::ErrorCode::ConfigMigrationFailed
+            | termfast_core::error::ErrorCode::InvalidParams => ExitCode::ConfigOrDaemon,
             _ => ExitCode::Generic,
         };
     }
@@ -455,19 +455,19 @@ async fn run_command(cli: &Cli) -> anyhow::Result<()> {
 // === SECTION 2 END ===
 
 /// Print a daemon response (JSON or human-readable)
-fn print_response(resp: &vps_guard_daemon::Response, json: bool) {
+fn print_response(resp: &termfast_daemon::Response, json: bool) {
     match resp {
-        vps_guard_daemon::Response::Ok { data, .. } => {
+        termfast_daemon::Response::Ok { data, .. } => {
             if json {
                 println!("{}", serde_json::to_string_pretty(data).unwrap_or_default());
             } else {
                 print_data_human(data);
             }
         }
-        vps_guard_daemon::Response::Err { error, .. } => {
+        termfast_daemon::Response::Err { error, .. } => {
             eprintln!("Error [{}]: {}", error.code_str(), error.detail);
         }
-        vps_guard_daemon::Response::Event { event, data } => {
+        termfast_daemon::Response::Event { event, data } => {
             if json {
                 println!(
                     "{{\"event\":\"{}\",\"data\":{}}}",
@@ -555,21 +555,21 @@ fn value_to_string(v: &serde_json::Value) -> String {
 
 /// Start the daemon in headless mode
 async fn start_daemon(config_path: Option<&std::path::Path>) -> anyhow::Result<()> {
-    use vps_guard_core::config::ConfigManager;
-    use vps_guard_daemon::{DaemonServer, DaemonState};
+    use termfast_core::config::ConfigManager;
+    use termfast_daemon::{DaemonServer, DaemonState};
 
     // Load config from specified path, or use default
     let mgr = if let Some(path) = config_path {
         ConfigManager::load(path)
             .map_err(|e| anyhow::anyhow!("failed to load config from {}: {}", path.display(), e))?
     } else {
-        ConfigManager::new(vps_guard_core::config::Config::default())
+        ConfigManager::new(termfast_core::config::Config::default())
     };
     let state = DaemonState::new(mgr);
 
     let server = DaemonServer::start(state).await?;
 
-    println!("VPS Guard daemon started (headless mode)");
+    println!("TermFast daemon started (headless mode)");
     println!("Socket: {}", server.socket_path().display());
 
     // Wait for shutdown signal
@@ -587,29 +587,29 @@ trait ErrorCodeStr {
     fn code_str(&self) -> &str;
 }
 
-impl ErrorCodeStr for vps_guard_daemon::IpcError {
+impl ErrorCodeStr for termfast_daemon::IpcError {
     fn code_str(&self) -> &str {
         // Return the actual error code name from the ErrorCode enum
         match self.code {
-            vps_guard_core::error::ErrorCode::PortConflict => "PortConflict",
-            vps_guard_core::error::ErrorCode::AuthFailed => "AuthFailed",
-            vps_guard_core::error::ErrorCode::SshConnectFailed => "SshConnectFailed",
-            vps_guard_core::error::ErrorCode::SshDisconnected => "SshDisconnected",
-            vps_guard_core::error::ErrorCode::HostKeyMismatch => "HostKeyMismatch",
-            vps_guard_core::error::ErrorCode::ConfigCorrupt => "ConfigCorrupt",
-            vps_guard_core::error::ErrorCode::ConfigMigrationFailed => "ConfigMigrationFailed",
-            vps_guard_core::error::ErrorCode::CredentialNotFound => "CredentialNotFound",
-            vps_guard_core::error::ErrorCode::CredentialStoreFailed => "CredentialStoreFailed",
-            vps_guard_core::error::ErrorCode::TemplateNotFound => "TemplateNotFound",
-            vps_guard_core::error::ErrorCode::TriggerNotFound => "TriggerNotFound",
-            vps_guard_core::error::ErrorCode::ServerNotFound => "ServerNotFound",
-            vps_guard_core::error::ErrorCode::ProxyPortInUse => "ProxyPortInUse",
-            vps_guard_core::error::ErrorCode::NeedsPrivilege => "NeedsPrivilege",
-            vps_guard_core::error::ErrorCode::ImportFailed => "ImportFailed",
-            vps_guard_core::error::ErrorCode::DecryptionFailed => "DecryptionFailed",
-            vps_guard_core::error::ErrorCode::TriggerCommandFailed => "TriggerCommandFailed",
-            vps_guard_core::error::ErrorCode::Internal => "Internal",
-            vps_guard_core::error::ErrorCode::InvalidParams => "InvalidParams",
+            termfast_core::error::ErrorCode::PortConflict => "PortConflict",
+            termfast_core::error::ErrorCode::AuthFailed => "AuthFailed",
+            termfast_core::error::ErrorCode::SshConnectFailed => "SshConnectFailed",
+            termfast_core::error::ErrorCode::SshDisconnected => "SshDisconnected",
+            termfast_core::error::ErrorCode::HostKeyMismatch => "HostKeyMismatch",
+            termfast_core::error::ErrorCode::ConfigCorrupt => "ConfigCorrupt",
+            termfast_core::error::ErrorCode::ConfigMigrationFailed => "ConfigMigrationFailed",
+            termfast_core::error::ErrorCode::CredentialNotFound => "CredentialNotFound",
+            termfast_core::error::ErrorCode::CredentialStoreFailed => "CredentialStoreFailed",
+            termfast_core::error::ErrorCode::TemplateNotFound => "TemplateNotFound",
+            termfast_core::error::ErrorCode::TriggerNotFound => "TriggerNotFound",
+            termfast_core::error::ErrorCode::ServerNotFound => "ServerNotFound",
+            termfast_core::error::ErrorCode::ProxyPortInUse => "ProxyPortInUse",
+            termfast_core::error::ErrorCode::NeedsPrivilege => "NeedsPrivilege",
+            termfast_core::error::ErrorCode::ImportFailed => "ImportFailed",
+            termfast_core::error::ErrorCode::DecryptionFailed => "DecryptionFailed",
+            termfast_core::error::ErrorCode::TriggerCommandFailed => "TriggerCommandFailed",
+            termfast_core::error::ErrorCode::Internal => "Internal",
+            termfast_core::error::ErrorCode::InvalidParams => "InvalidParams",
         }
     }
 }

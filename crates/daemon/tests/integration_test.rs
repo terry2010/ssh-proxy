@@ -2,8 +2,8 @@
 //!
 //! Tests the daemon socket server with a real client connection.
 
-use vps_guard_daemon::{Action, DaemonServer, DaemonState, Request, Response};
-use vps_guard_core::config::{Config, ConfigManager};
+use termfast_daemon::{Action, DaemonServer, DaemonState, Request, Response};
+use termfast_core::config::{Config, ConfigManager};
 use std::sync::Arc;
 
 #[cfg(unix)]
@@ -19,7 +19,7 @@ mod tests {
         let config = Config::default();
         let mgr = ConfigManager::new(config);
         let state = DaemonState::new(mgr)
-            .with_runtime_state(Arc::new(vps_guard_core::config::RuntimeStateManager::new(&rs_path)));
+            .with_runtime_state(Arc::new(termfast_core::config::RuntimeStateManager::new(&rs_path)));
         let server = DaemonServer::start_with_path(state, socket_path)
             .await
             .unwrap();
@@ -181,11 +181,11 @@ mod tests {
     // === SECTION 1 END ===
 
     /// Helper: create a test server config
-    fn make_test_server_config(id: &str, name: &str) -> vps_guard_core::config::ServerConfig {
-        vps_guard_core::config::ServerConfig {
+    fn make_test_server_config(id: &str, name: &str) -> termfast_core::config::ServerConfig {
+        termfast_core::config::ServerConfig {
             id: id.to_string(),
             name: name.to_string(),
-            ssh: vps_guard_core::config::SshConfig {
+            ssh: termfast_core::config::SshConfig {
                 host: "127.0.0.1".to_string(),
                 port: 22,
                 user: "testuser".to_string(),
@@ -195,15 +195,15 @@ mod tests {
                 connection_mode: "single".to_string(),
                 skip_hostkey_verify: true,
             },
-            proxy: vps_guard_core::config::ProxyConfig {
+            proxy: termfast_core::config::ProxyConfig {
                 enabled: false,
                 socks5_port: 1080,
                 http_port: 8080,
                 max_channels: 64,
                 channel_idle_timeout: 300,
             },
-            reconnect: vps_guard_core::config::ReconnectConfig::default(),
-            ip_check: vps_guard_core::config::IpCheckConfig::default(),
+            reconnect: termfast_core::config::ReconnectConfig::default(),
+            ip_check: termfast_core::config::IpCheckConfig::default(),
             last_known_ip: None,
             triggers: vec![],
             suppress_firewall_badge: false,

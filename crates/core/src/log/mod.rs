@@ -267,7 +267,7 @@ impl FileLogger {
     ) -> std::io::Result<Self> {
         let log_dir = log_dir.into();
         std::fs::create_dir_all(&log_dir)?;
-        let current_file = log_dir.join("vps-guard.log");
+        let current_file = log_dir.join("termfast.log");
         let current_size = match std::fs::metadata(&current_file) {
             Ok(meta) => meta.len(),
             Err(_) => 0,
@@ -314,14 +314,14 @@ impl FileLogger {
     }
 
     /// Rotate the current log file.
-    /// Renames current file to `vps-guard-<timestamp>.log` and cleans up old files.
+    /// Renames current file to `termfast-<timestamp>.log` and cleans up old files.
     fn rotate(&self) -> std::io::Result<()> {
         if !self.current_file.exists() {
             return Ok(());
         }
 
         let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S");
-        let rotated_name = format!("vps-guard-{}.log", timestamp);
+        let rotated_name = format!("termfast-{}.log", timestamp);
         let rotated_path = self.log_dir.join(&rotated_name);
         std::fs::rename(&self.current_file, &rotated_path)?;
 
@@ -331,7 +331,7 @@ impl FileLogger {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.starts_with("vps-guard-") && name.ends_with(".log") {
+                    if name.starts_with("termfast-") && name.ends_with(".log") {
                         if let Ok(meta) = entry.metadata() {
                             let mtime = meta.modified().unwrap_or(std::time::SystemTime::now());
                             rotated_files.push((path, mtime));
@@ -493,7 +493,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_logger() {
-        let tmp = std::env::temp_dir().join(format!("vps-guard-test-log-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("termfast-test-log-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let logger = FileLogger::new(&tmp, 1024, 3).unwrap();
 
@@ -508,7 +508,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_logger_rotation() {
-        let tmp = std::env::temp_dir().join(format!("vps-guard-test-log-rot-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("termfast-test-log-rot-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         // Very small max size to trigger rotation
         let logger = FileLogger::new(&tmp, 100, 3).unwrap();
@@ -524,7 +524,7 @@ mod tests {
         if let Ok(entries) = std::fs::read_dir(&tmp) {
             for entry in entries.flatten() {
                 if let Some(name) = entry.file_name().to_str() {
-                    if name.starts_with("vps-guard-") {
+                    if name.starts_with("termfast-") {
                         rotated_count += 1;
                     }
                 }

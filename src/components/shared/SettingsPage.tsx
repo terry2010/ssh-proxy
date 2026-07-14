@@ -8,6 +8,8 @@ import { ipcInvoke } from "@/hooks/useIpc";
 import type { SupportedLanguage } from "@/i18n/config";
 import i18n, { resolveLanguage } from "@/i18n/config";
 import { Modal } from "@/components/ui/Modal";
+import { toast } from "sonner";
+import { checkForUpdate, installUpdate, type UpdateResult } from "@/hooks/useUpdater";
 
 type TabId = "general" | "logs" | "proxy" | "trigger" | "notification" | "data" | "about";
 
@@ -390,6 +392,29 @@ function NotificationSection() {
 
 function AboutSection() {
   const { t } = useTranslation();
+  const [checking, setChecking] = useState(false);
+
+  const handleCheck = async () => {
+    if (checking) return;
+    setChecking(true);
+    const toastId = toast.loading(t("settings.about.checking"));
+    try {
+      const result = await checkForUpdate();
+      toast.dismiss(toastId);
+      if (!result) {
+        toast.success(t("settings.about.latest"));
+      } else {
+        promptInstallUpdate(t, result);
+      }
+    } catch (e) {
+      toast.dismiss(toastId);
+      toast.error(t("settings.about.failed"));
+      console.error("[AboutSection] update check failed:", e);
+    } finally {
+      setChecking(false);
+    }
+  };
+
   return (
     <SettingGroup title={t("settings.about.title")}>
       <SettingItem
@@ -397,7 +422,7 @@ function AboutSection() {
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-lg bg-blue-500 text-white flex items-center justify-center text-base font-bold">V</div>
             <div>
-              <div className="text-sm font-medium text-gray-900 dark:text-gray-100">VPS Guard</div>
+              <div className="text-sm font-medium text-gray-900 dark:text-gray-100">TermFast</div>
               <div className="text-xs text-gray-500 dark:text-gray-400">v{APP_VERSION}</div>
             </div>
           </div>
@@ -406,16 +431,59 @@ function AboutSection() {
         <span className="text-xs text-gray-500 dark:text-gray-400">{t("common.built_in")}</span>
       </SettingItem>
       <button
-        className="w-full text-left"
-        onClick={() => {/* TODO: check for updates */}}
+        className={`w-full text-left ${checking ? "opacity-50 cursor-not-allowed" : ""}`}
+        onClick={handleCheck}
+        disabled={checking}
       >
         <SettingItem label={t("settings.about.check_update")}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400">
-            <polyline points="9 18 15 12 9 6" />
-          </svg>
+          {checking ? (
+            <span className="text-xs text-gray-400">{t("settings.about.checking")}</span>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400">
+              <polyline points="9 18 15 12 9 6" />
+            </svg>
+          )}
         </SettingItem>
       </button>
     </SettingGroup>
+  );
+}
+
+function promptInstallUpdate(t: (key: string, options?: Record<string, string>) => string, result: UpdateResult) {
+  const version = result.info.version;
+  let progressToastId: string | number | undefined;
+
+  toast(
+    <div className="flex flex-col gap-2">
+      <div className="text-sm font-medium">{t("settings.about.available", { version })}</div>
+      {result.info.body && (
+        <div className="text-xs text-gray-500 dark:text-gray-400 max-h-24 overflow-y-auto whitespace-pre-line">
+          {result.info.body}
+        </div>
+      )}
+    </div>,
+    {
+      duration: 20000,
+      action: {
+        label: t("settings.about.install"),
+        onClick: async () => {
+          progressToastId = toast.loading(t("settings.about.installing"));
+          try {
+            await installUpdate(result.update, (percent) => {
+              if (progressToastId) {
+                toast.loading(`${t("settings.about.installing")} ${percent}%`, { id: progressToastId });
+              }
+            });
+            toast.dismiss(progressToastId);
+            toast.success(t("settings.about.installed"));
+          } catch (e) {
+            toast.dismiss(progressToastId);
+            toast.error(t("settings.about.failed"));
+            console.error("[AboutSection] install failed:", e);
+          }
+        },
+      },
+    }
   );
 }
 

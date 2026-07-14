@@ -112,7 +112,7 @@ mod tests {
     #[test]
     fn test_key_naming() {
         let key = super::super::make_key("srv_tokyo", "password");
-        assert_eq!(key, "vps-guard::srv_tokyo::password");
+        assert_eq!(key, "termfast::srv_tokyo::password");
     }
 
     #[test]

@@ -9,7 +9,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 
 // Generate a host key if it doesn't exist
-const keyPath = join(tmpdir(), "vps-guard-test-hostkey");
+const keyPath = join(tmpdir(), "termfast-test-hostkey");
 if (!existsSync(keyPath)) {
   const { generateKeyPairSync } = require("crypto");
   const { privateKey } = generateKeyPairSync("rsa", {

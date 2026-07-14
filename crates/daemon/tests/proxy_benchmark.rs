@@ -7,7 +7,7 @@
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use vps_guard_test_utils::MockSshServer;
+use termfast_test_utils::MockSshServer;
 
 // === SECTION 1 END ===
 

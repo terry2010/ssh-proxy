@@ -1,13 +1,13 @@
 [package]
-name = "vps-guard-daemon"
+name = "termfast-daemon"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
 [dependencies]
-vps-guard-core = { workspace = true }
-vps-guard-credential = { workspace = true }
+termfast-core = { workspace = true }
+termfast-credential = { workspace = true }
 russh = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
@@ -24,7 +24,7 @@ mach2 = "0.6.0"
 regex = "1.13.0"
 
 [dev-dependencies]
-vps-guard-test-utils = { workspace = true }
+termfast-test-utils = { workspace = true }
 tokio = { workspace = true }
 tempfile = { workspace = true }
 

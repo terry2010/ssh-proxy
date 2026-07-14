@@ -1,18 +1,18 @@
 [package]
-name = "vps-guard-desktop"
+name = "termfast-desktop"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
 [lib]
-name = "vps_guard_desktop"
+name = "termfast_desktop"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
-vps-guard-core = { workspace = true }
-vps-guard-credential = { workspace = true }
-vps-guard-daemon = { workspace = true }
+termfast-core = { workspace = true }
+termfast-credential = { workspace = true }
+termfast-daemon = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

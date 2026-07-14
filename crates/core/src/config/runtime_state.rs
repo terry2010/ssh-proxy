@@ -45,7 +45,7 @@ impl RuntimeStateManager {
 
     /// Create with platform default path (same dir as config.json)
     pub fn with_default_path() -> Result<Self> {
-        let proj_dir = directories::ProjectDirs::from("", "", "vps-guard")
+        let proj_dir = directories::ProjectDirs::from("", "", "termfast")
             .ok_or_else(|| Error::Config("cannot determine data directory".into()))?;
         let path = proj_dir.data_dir().join("runtime_state.json");
         Ok(Self::new(path))

@@ -1,5 +1,5 @@
 [package]
-name = "vps-guard-core"
+name = "termfast-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -28,6 +28,6 @@ ssh-key = { version = "0.7.0-rc.11", features = ["rand_core", "getrandom", "encr
 rand = { workspace = true }
 
 [dev-dependencies]
-vps-guard-test-utils = { workspace = true }
+termfast-test-utils = { workspace = true }
 tokio = { workspace = true }
 tempfile = { workspace = true }

@@ -1,4 +1,4 @@
-//! VPS Guard Desktop — Tauri shell
+//! TermFast Desktop — Tauri shell
 //!
 //! Desktop-specific functionality: tray, autostart, platform adapter,
 //! notifications, offline detection, window effects.

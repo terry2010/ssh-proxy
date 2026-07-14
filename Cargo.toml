@@ -56,11 +56,11 @@ clap = { version = "4", features = ["derive"] }
 comfy-table = "7"
 
 # Internal crates
-vps-guard-core = { path = "crates/core" }
-vps-guard-credential = { path = "crates/credential" }
-vps-guard-daemon = { path = "crates/daemon" }
-vps-guard-desktop = { path = "crates/desktop" }
-vps-guard-test-utils = { path = "crates/test-utils" }
+termfast-core = { path = "crates/core" }
+termfast-credential = { path = "crates/credential" }
+termfast-daemon = { path = "crates/daemon" }
+termfast-desktop = { path = "crates/desktop" }
+termfast-test-utils = { path = "crates/test-utils" }
 
 # Test dependencies
 tempfile = "3"

@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    vps_guard_app_lib::run()
+    termfast_app_lib::run()
 }
