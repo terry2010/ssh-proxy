@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { useServerStore } from "@/stores/serverStore";
 import { useConfigStore } from "@/stores/configStore";
+import i18n, { resolveLanguage } from "@/i18n/config";
 import { useDaemonEvents } from "@/hooks/useDaemonEvents";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { ipcInvoke } from "@/hooks/useIpc";
@@ -56,7 +57,14 @@ export default function App() {
 
     ipcInvoke<any>("ipc_get_config")
       .then((data) => {
-        if (data) setConfig(data);
+        if (data) {
+          setConfig(data);
+          // Apply saved language preference on startup
+          const savedLang = data?.general?.language;
+          if (savedLang) {
+            i18n.changeLanguage(resolveLanguage(savedLang));
+          }
+        }
       })
       .catch((e) => console.error("load config failed:", e));
 

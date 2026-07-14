@@ -14,8 +14,8 @@ exclude = ["spikes/russh-stress"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
-authors = ["VPS Guard Contributors"]
+license = "Apache-2.0"
+authors = ["TermFast Contributors"]
 
 [workspace.dependencies]
 # SSH (plan specified =0.61.2; latest available is 0.62.2 — deviation recorded)
