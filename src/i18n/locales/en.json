@@ -118,6 +118,7 @@
     "test_proxy_cancelled": "Test cancelled",
     "manage": "Manage",
     "login_server": "New Terminal",
+    "connect_terminal": "Connect Terminal",
     "terminal": "Terminal",
     "terminal_open_failed": "Failed to open terminal"
   },

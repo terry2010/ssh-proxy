@@ -35,7 +35,7 @@ import "@xterm/xterm/css/xterm.css";
 //    retransmits (ZRQINIT) and should be silently ignored.
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const ZmodemAny = ZmodemLib as any;
+const ZmodemAny = (ZmodemLib as any).default || (ZmodemLib as any);
 
 // Patch 1: Sentry._parse — use 4-byte prefix (** ZDLE B) instead of 5-byte
 // (** ZDLE B 0) so both ZRQINIT (download) and ZRINIT (upload) are detected.
@@ -64,9 +64,13 @@ if (SentryProto && !SentryProto._patched_parse) {
 }
 
 // Patch 2: Completely replace _start_keepalive and _stop_keepalive.
-// The original code has a typo and a race condition: the .then() callback
-// sends ZSINIT and restarts the timer, but _stop_keepalive can't prevent
-// the .then() from running if the timeout already fired.
+// The original code has a typo: _stop_keepalive sets _keep_alive_promise
+// (extra underscore) instead of _keepalive_promise, so the promise is never
+// cleared. Worse, the .then() callback unconditionally sends ZSINIT and
+// restarts the timer — there is no "stopped" check. This means even after
+// _stop_keepalive clears the timeout, if the .then() already fired (race),
+// it will send ZSINIT and start a new timer, creating an infinite loop of
+// ZSINIT packets after the session ends.
 // We add a _keepalive_stopped flag checked both in _start_keepalive AND
 // in the .then() callback to fully suppress keepalive after session end.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -151,11 +155,25 @@ if (SessionProto && !SessionProto._patched_consume) {
 
 // Patch 5: close() — stop keepalive BEFORE sending ZFIN to prevent
 // the keepalive .then() from overwriting the ZFIN handler.
+// NB: Session.Send has its own close() that overrides Session.close(),
+// so we must patch Session.Send.prototype.close directly.
+const SendProtoClose: any = ZmodemAny.Session?.Send?.prototype;
+if (SendProtoClose && !SendProtoClose._patched_close) {
+  const origSendClose = SendProtoClose.close;
+  SendProtoClose.close = function () {
+    // Stop keepalive first — prevents race where keepalive .then()
+    // overwrites _next_header_handler after close() sets { ZFIN }
+    if (typeof this._stop_keepalive === "function") {
+      this._stop_keepalive();
+    }
+    return origSendClose.call(this);
+  };
+  SendProtoClose._patched_close = true;
+}
+// Also patch Session.prototype.close for Receive sessions
 if (SessionProto && !SessionProto._patched_close) {
   const origClose = SessionProto.close;
   SessionProto.close = function () {
-    // Stop keepalive first — prevents race where keepalive .then()
-    // overwrites _next_header_handler after close() sets { ZFIN }
     if (typeof this._stop_keepalive === "function") {
       this._stop_keepalive();
     }
@@ -286,6 +304,10 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
     // Cooldown timestamp: after a session ends, ignore new detections for
     // a few seconds to prevent spurious sessions from echoed ZMODEM bytes.
     let zmodemCooldownUntil = 0;
+    // Ending flag: set true when the upload/download is wrapping up.
+    // Blocks the sender callback so no ZSINIT keepalive or other protocol
+    // bytes escape to the PTY after the session is done.
+    let zmodemEnding = false;
 
     // Force-clear the Sentry's internal session state so it stops
     // feeding data to a dead session and stops creating spurious sessions
@@ -321,12 +343,14 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
         });
       });
       session.on("session_end", () => {
+        zmodemEnding = true;
         zmodemSession = null;
         zmodemCooldownUntil = Date.now() + 10000;  // 10s cooldown
         clearSentryState();
       });
       session.start().catch((e: unknown) => {
         console.error("[ZMODEM] session start failed:", e);
+        zmodemEnding = true;
         zmodemSession = null;
         zmodemCooldownUntil = Date.now() + 10000;
         clearSentryState();
@@ -342,15 +366,43 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
       input.style.display = "none";
       document.body.appendChild(input);
 
+      // Hard-stop the keepalive timer on the session so it can never send
+      // ZSINIT packets after the transfer ends. We clear the timeout, null
+      // the promise, and set the stopped flag — covering both patched and
+      // unpatched library code.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const forceStopKeepalive = (sess: any) => {
+        sess._keepalive_stopped = true;
+        if (sess._keepalive_timeout) {
+          clearTimeout(sess._keepalive_timeout);
+          sess._keepalive_timeout = null;
+        }
+        sess._keepalive_promise = null;
+      };
+
+      // Centralised cleanup — always runs, whether close() succeeds, times
+      // out, or throws. Ensures zmodemSession is nulled and the Sentry is
+      // reset so no stale session can send data to the PTY.
+      const cleanupRzSession = () => {
+        forceStopKeepalive(session);
+        // Kill the session's sender so it can NEVER send anything again,
+        // even if a stray keepalive .then() fires after cleanup.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (session as any)._sender = function () { /* dead session */ };
+        zmodemEnding = false;
+        zmodemSession = null;
+        zmodemCooldownUntil = Date.now() + 10000;
+        clearSentryState();
+      };
+
       input.onchange = async () => {
         document.body.removeChild(input);
         const files = input.files;
         if (!files || files.length === 0) {
           console.log("[ZMODEM] rz: no files selected, aborting");
-          session.abort();
-          zmodemSession = null;
-          zmodemCooldownUntil = Date.now() + 10000;
-          clearSentryState();
+          zmodemEnding = true;
+          try { session.abort(); } catch (_) { /* ignore */ }
+          cleanupRzSession();
           return;
         }
         console.log("[ZMODEM] rz: selected", files.length, "file(s)");
@@ -382,18 +434,37 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
             await xfer.end(new Uint8Array(0));
             console.log("[ZMODEM] rz: file end confirmed");
           }
+          // All files sent — wind down the session.
           console.log("[ZMODEM] rz: closing session");
-          await session.close();
+          // Hard-stop keepalive before close() as a belt-and-suspenders
+          // measure (Patch 5 should do this, but the patch may not have
+          // been applied if the module shape differs at runtime).
+          forceStopKeepalive(session);
+          // close() sends ZFIN synchronously, then returns a promise that
+          // resolves when the peer's ZFIN arrives. We capture the promise
+          // first so ZFIN is sent while zmodemEnding is still false.
+          const closePromise = session.close();
+          // Now block all further sends (keepalive ZSINIT, etc.) while we
+          // wait for the peer's ZFIN response.
+          zmodemEnding = true;
+          // Race with a timeout so we never hang forever if the peer
+          // never responds.
+          await Promise.race([
+            closePromise,
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error("ZMODEM close timeout")), 10000),
+            ),
+          ]).catch((e) => {
+            console.warn("[ZMODEM] rz: close failed/timed out:", e);
+            try { session.abort(); } catch (_) { /* ignore */ }
+          });
           console.log("[ZMODEM] rz: session closed, clearing state");
-          zmodemSession = null;
-          zmodemCooldownUntil = Date.now() + 10000;  // 10s cooldown
-          clearSentryState();
+          cleanupRzSession();
         } catch (e) {
           console.error("[ZMODEM] rz: upload failed:", e);
-          session.abort();
-          zmodemSession = null;
-          zmodemCooldownUntil = Date.now() + 10000;
-          clearSentryState();
+          zmodemEnding = true;
+          try { session.abort(); } catch (_) { /* ignore */ }
+          cleanupRzSession();
         }
       };
       input.click();
@@ -417,10 +488,14 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
         term.write(octetsToString(octets));
       },
       sender: (octets: number[]) => {
-        // Block all sends when no session is active or during cooldown.
-        // This prevents keepalive ZSINIT packets from being sent after
-        // the session has ended.
-        if (!zmodemSession || Date.now() < zmodemCooldownUntil) return;
+        // Block all sends when no session is active, during cooldown, or
+        // when the session is ending. This prevents keepalive ZSINIT packets
+        // from being sent after the session has ended.
+        if (!zmodemSession || zmodemEnding || Date.now() < zmodemCooldownUntil) {
+          console.log("[ZMODEM] sender BLOCKED:", "session=", !!zmodemSession, "ending=", zmodemEnding, "cooldown=", Date.now() < zmodemCooldownUntil, "len=", octets.length);
+          return;
+        }
+        console.log("[ZMODEM] sender sending", octets.length, "bytes, first4:", octets.slice(0, 4).join(","));
         sendToBackend(octets);
       },
       on_detect: (detection: ZmodemDetection) => {
@@ -432,9 +507,26 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
           return;
         }
         const session = detection.confirm();
-        // Reset keepalive flag for new session
+        // The original library has a broken keepalive: the .then() callback
+        // unconditionally sends ZSINIT, restarts the timer, and overwrites
+        // _next_header_handler (which races with the ZFIN handler and prevents
+        // close() from resolving). The keepalive is only needed to keep lrzsz
+        // alive while the user is picking a file; we disable it entirely on the
+        // session instance so no ZSINIT packets can ever be sent.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (session as any)._keepalive_stopped = false;
+        const sessAny = session as any;
+        sessAny._start_keepalive = function () { /* disabled */ };
+        sessAny._stop_keepalive = function () { /* disabled */ };
+        sessAny._send_ZSINIT = function () { /* disabled */ };
+        // Clear any timeout that was already scheduled by the original
+        // _start_keepalive called during set_sender.
+        if (sessAny._keepalive_timeout) {
+          clearTimeout(sessAny._keepalive_timeout);
+          sessAny._keepalive_timeout = null;
+        }
+        sessAny._keepalive_promise = null;
+        console.log("[ZMODEM] session created, type=", session.type, "keepalive disabled");
+        zmodemEnding = false;
         zmodemSession = session;
         // session.type === "receive" → we are receiving (remote ran sz) → download
         // session.type === "send"    → we are sending (remote ran rz) → upload

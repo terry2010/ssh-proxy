@@ -120,6 +120,7 @@
     "test_proxy_cancelled": "测试已取消",
     "manage": "管理",
     "login_server": "新建终端",
+    "connect_terminal": "连接终端",
     "terminal": "终端",
     "terminal_open_failed": "打开终端失败"
   },
