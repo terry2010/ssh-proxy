@@ -129,7 +129,11 @@
     "login_server": "新建终端",
     "connect_terminal": "连接终端",
     "terminal": "终端",
-    "terminal_open_failed": "打开终端失败"
+    "terminal_open_failed": "打开终端失败",
+    "terminal_disconnected": "终端已断开连接",
+    "reconnect_terminal": "重新连接",
+    "reconnect_timeout": "重连时长",
+    "reconnect_timeout_unlimited": "无限"
   },
   "proxy": {
     "enable": "开启代理",

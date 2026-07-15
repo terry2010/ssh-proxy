@@ -70,6 +70,8 @@ pub struct ServerInstance {
     runtime_state: Mutex<Option<Arc<crate::config::RuntimeStateManager>>>,
     /// Optional callback to broadcast trigger results to frontend
     trigger_result_callback: Mutex<Option<Arc<dyn Fn(TriggerEvent, &[crate::trigger::engine::TriggerExecutionResult]) + Send + Sync>>>,
+    /// Optional callback to broadcast status changes to frontend
+    status_change_callback: Mutex<Option<Arc<dyn Fn(&ServerStatus) + Send + Sync>>>,
     /// Client IP detected after SSH connection (§5.2)
     client_ip: Mutex<Option<String>>,
     /// Last auth method used (for auto-reconnect)
@@ -111,6 +113,7 @@ impl ServerInstance {
             channel_manager: Mutex::new(None),
             runtime_state: Mutex::new(None),
             trigger_result_callback: Mutex::new(None),
+            status_change_callback: Mutex::new(None),
             client_ip: Mutex::new(None),
             last_auth: Mutex::new(None),
         }
@@ -174,6 +177,19 @@ impl ServerInstance {
     /// Set callback for trigger execution results (to broadcast to frontend)
     pub async fn set_trigger_result_callback(&self, cb: Arc<dyn Fn(TriggerEvent, &[crate::trigger::engine::TriggerExecutionResult]) + Send + Sync>) {
         *self.trigger_result_callback.lock().await = Some(cb);
+    }
+
+    /// Set callback for status changes (to broadcast to frontend)
+    pub async fn set_status_change_callback(&self, cb: Arc<dyn Fn(&ServerStatus) + Send + Sync>) {
+        *self.status_change_callback.lock().await = Some(cb);
+    }
+
+    /// Broadcast status change to frontend if callback is set
+    async fn broadcast_status(&self, status: &ServerStatus) {
+        let cb = self.status_change_callback.lock().await;
+        if let Some(ref f) = *cb {
+            f(status);
+        }
     }
 
     /// Connect to the server with the given auth method.
@@ -288,7 +304,6 @@ impl ServerInstance {
                 // Connection dropped — check if this was a user-initiated disconnect
                 let current_status = instance.status.lock().await.clone();
                 if current_status == ServerStatus::Disconnected {
-                    // User explicitly disconnected — stop monitoring
                     tracing::info!("connection monitor: {} was explicitly disconnected, stopping", instance.config.name);
                     break;
                 }
@@ -296,35 +311,64 @@ impl ServerInstance {
                 // Connection dropped unexpectedly — start auto-reconnect
                 tracing::warn!("connection monitor: {} SSH connection lost, auto-reconnecting", instance.config.name);
                 *instance.status.lock().await = ServerStatus::Reconnecting;
+                instance.broadcast_status(&ServerStatus::Reconnecting).await;
 
                 let auth = instance.last_auth.lock().await.clone();
                 if auth.is_none() {
                     tracing::error!("connection monitor: no saved auth for {}, cannot reconnect", instance.config.name);
                     *instance.status.lock().await = ServerStatus::Error;
+                    instance.broadcast_status(&ServerStatus::Error).await;
                     break;
                 }
                 let auth = auth.unwrap();
 
-                let max_attempts = instance.config.reconnect.max_attempts;
-                let mut backoff = instance.config.reconnect.initial_backoff_secs;
-                let max_backoff = instance.config.reconnect.max_backoff_secs;
+                // Segmented backoff strategy:
+                //   0-10s:    every 1s
+                //   10-60s:   every 3s
+                //   60s-5m:   every 10s
+                //   5m-15m:   every 30s
+                //   15m+:     every 60s
+                // Stops when elapsed >= reconnect_timeout_secs (0 = unlimited)
+                let reconnect_timeout = instance.config.reconnect.reconnect_timeout_secs;
+                let mut elapsed_secs: u64 = 0;
                 let mut reconnected = false;
+                let mut attempt: u32 = 0;
 
-                for attempt in 1..=max_attempts {
+                loop {
+                    // Check timeout (0 = unlimited)
+                    if reconnect_timeout > 0 && elapsed_secs >= reconnect_timeout {
+                        break;
+                    }
+
+                    let backoff = if elapsed_secs < 10 {
+                        1
+                    } else if elapsed_secs < 60 {
+                        3
+                    } else if elapsed_secs < 300 {
+                        10
+                    } else if elapsed_secs < 900 {
+                        30
+                    } else {
+                        60
+                    };
+
+                    attempt += 1;
                     tracing::info!(
-                        "connection monitor: {} reconnect attempt {}/{} after {}s",
-                        instance.config.name, attempt, max_attempts, backoff
+                        "connection monitor: {} reconnect attempt {} after {}s (next in {}s)",
+                        instance.config.name, attempt, elapsed_secs, backoff
                     );
                     tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+                    elapsed_secs += backoff;
 
                     match instance.ssh_client.connect(&auth).await {
                         Ok(()) => {
-                            tracing::info!("connection monitor: {} reconnected on attempt {}", instance.config.name, attempt);
+                            tracing::info!("connection monitor: {} reconnected on attempt {} after {}s", instance.config.name, attempt, elapsed_secs);
                             // Restore channel opener handle
                             if let Some(h) = instance.ssh_client.get_handle().await {
                                 instance.channel_opener.set_handle(h).await;
                             }
                             *instance.status.lock().await = ServerStatus::Connected;
+                            instance.broadcast_status(&ServerStatus::Connected).await;
 
                             // Restart proxy if it was running before disconnect
                             if *instance.proxy_was_running.lock().await {
@@ -349,17 +393,17 @@ impl ServerInstance {
                                 "connection monitor: {} reconnect attempt {} failed: {}",
                                 instance.config.name, attempt, e
                             );
-                            backoff = (backoff * 2).min(max_backoff);
                         }
                     }
                 }
 
                 if !reconnected {
                     tracing::error!(
-                        "connection monitor: {} failed to reconnect after {} attempts",
-                        instance.config.name, max_attempts
+                        "connection monitor: {} failed to reconnect after {} attempts ({}s, timeout={})",
+                        instance.config.name, attempt, elapsed_secs, if reconnect_timeout == 0 { "unlimited".to_string() } else { reconnect_timeout.to_string() }
                     );
                     *instance.status.lock().await = ServerStatus::Error;
+                    instance.broadcast_status(&ServerStatus::Error).await;
                     break;
                 }
 

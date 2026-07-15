@@ -4,7 +4,7 @@
 //! Platform-specific storage (keychain etc.) is in credential crate.
 
 use super::config::Config;
-use super::migration::backup_corrupt_config;
+use super::migration::{backup_corrupt_config, load_config_with_migration};
 use crate::error::{Error, ErrorCode, IpcError, Result};
 use std::path::{Path, PathBuf};
 
@@ -60,44 +60,9 @@ impl FileConfigStorage {
 
 impl ConfigStorage for FileConfigStorage {
     fn load(&self) -> Result<Config> {
-        // If the main config file doesn't exist but a .tmp file does, it means
-        // a crash happened during atomic write (after write(tmp), before rename).
-        // Try to recover by renaming .tmp → config.json first.
-        if !self.config_path.exists() {
-            let tmp_path = self.config_path.with_extension("json.tmp");
-            if tmp_path.exists() {
-                tracing::warn!("config file missing but .tmp exists — attempting recovery");
-                if let Err(e) = std::fs::rename(&tmp_path, &self.config_path) {
-                    tracing::error!("failed to recover config from .tmp: {}", e);
-                }
-            }
-        }
-
-        if !self.config_path.exists() {
-            tracing::info!("config file not found, using default config");
-            return Ok(Config::default());
-        }
-
-        let content = std::fs::read_to_string(&self.config_path).map_err(|e| {
-            Error::Ipc(IpcError::new(
-                ErrorCode::ConfigCorrupt,
-                format!("failed to read config: {}", e),
-            ))
-        })?;
-
-        let config: Config = serde_json::from_str(&content).map_err(|e| {
-            tracing::error!("config parse error: {}", e);
-            // Back up the corrupt file before returning the error so the
-            // user's data is not lost when a caller falls back to defaults
-            // and then saves (which would overwrite the original file).
-            let _ = backup_corrupt_config(&self.config_path);
-            Error::Ipc(IpcError::new(
-                ErrorCode::ConfigCorrupt,
-                format!("config JSON parse error: {}", e),
-            ))
-        })?;
-
-        Ok(config)
+        // Delegate to the migration-aware loader which handles version
+        // checks, chain migration, and corrupt file recovery.
+        load_config_with_migration(&self.config_path)
     }
 
     fn save(&self, config: &Config) -> Result<()> {
@@ -250,7 +215,7 @@ mod tests {
         let storage = FileConfigStorage::new(&path);
 
         let config = storage.load().unwrap();
-        assert_eq!(config.version, 1);
+        assert_eq!(config.version, 2);
         assert!(config.servers.is_empty());
     }
 
@@ -283,12 +248,14 @@ mod tests {
         std::fs::write(&path, "{ invalid json }").unwrap();
 
         let storage = FileConfigStorage::new(&path);
-        let result = storage.load();
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        match err {
-            Error::Ipc(ipc) => assert_eq!(ipc.code, ErrorCode::ConfigCorrupt),
-            _ => panic!("expected IpcError with ConfigCorrupt"),
-        }
+        // Corrupt JSON → backup file + return default config (not an error)
+        let config = storage.load().unwrap();
+        assert!(config.servers.is_empty());
+        // Corrupt file should have been backed up
+        let entries = std::fs::read_dir(dir.path()).unwrap();
+        let has_backup = entries
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().contains("corrupt"));
+        assert!(has_backup);
     }
 }

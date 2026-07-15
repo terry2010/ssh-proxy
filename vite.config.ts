@@ -29,7 +29,7 @@ export default defineConfig({
           port: 1420,
         },
     watch: {
-      ignored: ["**/src-tauri/**"],
+      ignored: ["**/src-tauri/**", "**/docs/**"],
     },
   },
   test: {

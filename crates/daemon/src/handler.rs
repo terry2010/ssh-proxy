@@ -143,6 +143,7 @@ async fn handle_list_servers(state: &DaemonState) -> HandlerResult {
                 "auto_reconnect": cfg.reconnect.auto_reconnect,
                 "heartbeat_interval": cfg.reconnect.heartbeat_interval,
                 "max_attempts": cfg.reconnect.max_attempts,
+                "reconnect_timeout_secs": cfg.reconnect.reconnect_timeout_secs,
                 "initial_backoff_secs": cfg.reconnect.initial_backoff_secs,
                 "max_backoff_secs": cfg.reconnect.max_backoff_secs,
             },
@@ -441,6 +442,37 @@ async fn handle_connect_server(state: &DaemonState, params: &serde_json::Value) 
                         }
                     }
                 });
+            }
+        })).await;
+    }
+
+    // Set status change callback — broadcast status changes to frontend
+    // (used by connection monitor for auto-reconnect status updates)
+    {
+        let forwarder = state.event_forwarder_handle();
+        let sid = server_id.to_string();
+        let client_ip = server.client_ip().await;
+        server.set_status_change_callback(Arc::new(move |status| {
+            let status_str = match status {
+                termfast_core::server::instance::ServerStatus::Disconnected => "disconnected",
+                termfast_core::server::instance::ServerStatus::Connecting => "connecting",
+                termfast_core::server::instance::ServerStatus::Connected => "connected",
+                termfast_core::server::instance::ServerStatus::Reconnecting => "reconnecting",
+                termfast_core::server::instance::ServerStatus::AuthFailed => "auth_failed",
+                termfast_core::server::instance::ServerStatus::Error => "error",
+                termfast_core::server::instance::ServerStatus::Offline => "offline",
+            };
+            if let Ok(fwd) = forwarder.lock() {
+                if let Some(ref f) = *fwd {
+                    f(
+                        "server:status_changed",
+                        serde_json::json!({
+                            "server_id": sid,
+                            "status": status_str,
+                            "client_ip": client_ip,
+                        }),
+                    );
+                }
             }
         })).await;
     }
@@ -788,6 +820,10 @@ async fn handle_update_server(state: &DaemonState, params: &serde_json::Value) -
             // Update auto_reconnect
             if let Some(v) = params["auto_reconnect"].as_bool() {
                 srv.reconnect.auto_reconnect = v;
+            }
+            // Update reconnect_timeout_secs (clamp: 0=unlimited, min 3, max 259200=3days)
+            if let Some(v) = params["reconnect_timeout_secs"].as_u64() {
+                srv.reconnect.reconnect_timeout_secs = if v == 0 { 0 } else { v.clamp(3, 259200) };
             }
         }
         config.find_server(server_id).cloned()

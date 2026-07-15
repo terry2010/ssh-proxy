@@ -151,7 +151,7 @@ impl SshClientHandle {
 
         let config = self.config.lock().await;
         let russh_config = Arc::new(client::Config {
-            keepalive_interval: Some(Duration::from_secs(config.heartbeat_interval)),
+            keepalive_interval: Some(Duration::from_secs(10)),
             keepalive_max: 3,
             ..Default::default()
         });
