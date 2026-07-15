@@ -24,7 +24,7 @@ pub struct Config {
 }
 
 fn default_version() -> u32 {
-    1
+    2
 }
 
 /// General application preferences (§7.2).
@@ -329,6 +329,10 @@ pub struct ReconnectConfig {
     pub heartbeat_interval: u64,
     #[serde(default = "default_max_attempts")]
     pub max_attempts: u32,
+    /// Total seconds to keep trying to reconnect before giving up.
+    /// 0 = unlimited. Min 3s, max 259200s (3 days).
+    #[serde(default = "default_reconnect_timeout")]
+    pub reconnect_timeout_secs: u64,
     #[serde(default = "default_initial_backoff")]
     pub initial_backoff_secs: u64,
     #[serde(default = "default_max_backoff")]
@@ -339,16 +343,19 @@ fn default_auto_reconnect() -> bool {
     true
 }
 fn default_heartbeat_interval() -> u64 {
-    15
+    10
 }
 fn default_max_attempts() -> u32 {
-    10
+    999
+}
+fn default_reconnect_timeout() -> u64 {
+    86400 // 24 hours
 }
 fn default_initial_backoff() -> u64 {
     1
 }
 fn default_max_backoff() -> u64 {
-    30
+    60
 }
 
 impl Default for ReconnectConfig {
@@ -357,6 +364,7 @@ impl Default for ReconnectConfig {
             auto_reconnect: default_auto_reconnect(),
             heartbeat_interval: default_heartbeat_interval(),
             max_attempts: default_max_attempts(),
+            reconnect_timeout_secs: default_reconnect_timeout(),
             initial_backoff_secs: default_initial_backoff(),
             max_backoff_secs: default_max_backoff(),
         }

@@ -817,18 +817,23 @@ export function ServerDetail() {
                   </button>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4 text-sm border-t border-gray-100 dark:border-gray-700 pt-5">
-                <div>
+              <div className="flex flex-col sm:flex-row gap-4 sm:gap-6 text-sm border-t border-gray-100 dark:border-gray-700 pt-5">
+                {/* Left info column */}
+                <div className="flex-[2] min-w-0">
                   <div className="text-xs text-gray-500 mb-1.5">{t("server.host")}</div>
                   <div className="font-mono text-sm text-gray-900 dark:text-gray-100 truncate">{server.ssh?.host || "?"}:{server.ssh?.port || "?"}</div>
                   <div className="text-xs text-gray-500 mt-3 mb-1">{t("server.ip_label")}</div>
                   <div className="font-mono text-sm text-gray-900 dark:text-gray-100 truncate">{server.client_ip || "—"}</div>
                 </div>
-                <div>
+                {/* Middle info column: auth */}
+                <div className="shrink-0 w-20 sm:w-24">
                   <div className="text-xs text-gray-500 mb-1.5">{t("server.auth_method")}</div>
                   <div className="text-sm text-gray-900 dark:text-gray-100">{server.ssh?.auth_method === "key" ? t("server.ssh_key") : t("server.password")}</div>
-                  <div className="flex items-center gap-2 mt-3">
-                    <span className="text-xs text-gray-500">{t("server.auto_reconnect")}</span>
+                </div>
+                {/* Reconnect controls placed in the right-side empty area */}
+                <div className="shrink-0 flex flex-col items-start justify-start sm:justify-center gap-2 bg-gray-50 dark:bg-gray-900/30 rounded-lg px-3 py-2 sm:px-4 sm:py-3">
+                  <div className="flex items-center gap-2 whitespace-nowrap">
+                    <span className="text-xs text-gray-500 whitespace-nowrap">{t("server.auto_reconnect")}</span>
                     <Toggle
                       checked={server.reconnect?.auto_reconnect ?? true}
                       onChange={(v) => {
@@ -844,6 +849,54 @@ export function ServerDetail() {
                       }}
                     />
                   </div>
+                  {(server.reconnect?.auto_reconnect ?? true) && (
+                    <div className="flex items-center gap-2 whitespace-nowrap">
+                      <span className="text-xs text-gray-500 whitespace-nowrap">{t("server.reconnect_timeout")}</span>
+                      <select
+                        className="text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded px-2 py-1 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                        value={(() => {
+                          const secs = server.reconnect?.reconnect_timeout_secs ?? 86400;
+                          if (secs === 0) return "0";
+                          if (secs < 60) return `${secs}s`;
+                          if (secs < 3600) return `${Math.floor(secs / 60)}m`;
+                          if (secs < 86400) return `${Math.floor(secs / 3600)}h`;
+                          return `${Math.floor(secs / 86400)}d`;
+                        })()}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          let secs = 0;
+                          if (val !== "0") {
+                            const num = parseInt(val);
+                            const unit = val.slice(-1);
+                            secs = unit === "s" ? num : unit === "m" ? num * 60 : unit === "h" ? num * 3600 : num * 86400;
+                            secs = Math.max(3, Math.min(259200, secs));
+                          }
+                          ipcInvoke("ipc_update_server", { server_id: server.id, reconnect_timeout_secs: secs }).catch(() => {});
+                          useServerStore.setState((s) => ({
+                            servers: s.servers.map((srv) =>
+                              srv.id === server.id
+                                ? { ...srv, reconnect: { ...srv.reconnect, reconnect_timeout_secs: secs } }
+                                : srv
+                            ),
+                          }));
+                        }}
+                      >
+                        <option value="3s">3s</option>
+                        <option value="10s">10s</option>
+                        <option value="30s">30s</option>
+                        <option value="1m">1m</option>
+                        <option value="5m">5m</option>
+                        <option value="15m">15m</option>
+                        <option value="30m">30m</option>
+                        <option value="1h">1h</option>
+                        <option value="6h">6h</option>
+                        <option value="12h">12h</option>
+                        <option value="1d">1d</option>
+                        <option value="2d">2d</option>
+                        <option value="3d">3d</option>
+                      </select>
+                    </div>
+                  )}
                 </div>
               </div>
               {server.auth_banner && (
@@ -1047,6 +1100,53 @@ export function ServerDetail() {
           }
         >
           <TerminalView sessionId={tt.sessionId} serverId={server.id} active={activeTab === tt.id} initialOutput={tt.initialOutput} />
+          {tt.disconnected && (
+            <div className="absolute top-0 left-0 right-0 flex items-center justify-between bg-black/70 px-4 py-2 z-10 pointer-events-auto">
+              <p className="text-gray-400 text-sm">{t("server.terminal_disconnected")}</p>
+              <button
+                  className="px-5 py-2.5 text-sm rounded-lg bg-green-500 text-white hover:bg-green-600 font-medium shadow-sm transition-colors"
+                  onClick={async () => {
+                    if (!server.id) return;
+                    const serverId = server.id;
+                    // Ensure SSH is connected first
+                    const currentServer = useServerStore.getState().servers.find((s) => s.id === serverId);
+                    if (!currentServer || currentServer.current_status !== "connected") {
+                      updateServerStatus(serverId, "connecting");
+                      try {
+                        await ipcInvoke("ipc_connect_server", { serverId });
+                        updateServerStatus(serverId, "connected", currentServer?.last_known_ip || undefined);
+                      } catch (e) {
+                        const errMsg = formatIpcError(e);
+                        updateServerStatus(serverId, "offline");
+                        toast.error(t("server.connect_failed"), { description: errMsg });
+                        return;
+                      }
+                    }
+                    // Open a new terminal session to replace the disconnected one
+                    try {
+                      const result = await ipcInvoke<{ session_id: string; initial_output: string }>(
+                        "ipc_terminal_open",
+                        { server_id: serverId, cols: 80, rows: 24 }
+                      );
+                      const newSessionId = result.session_id;
+                      const newInitialOutput = result.initial_output || "";
+                      const newTabId: Tab = `term:${newSessionId}`;
+                      const currentTabs = useServerStore.getState().terminal_tabs_by_server[serverId] || [];
+                      const defaultLabel = tt.defaultLabel || `${t("server.terminal")} ${currentTabs.length + 1}`;
+                      // Replace the disconnected tab with the new one
+                      removeTerminalTab(serverId, tt.id);
+                      addTerminalTab(serverId, { id: newTabId, sessionId: newSessionId, label: defaultLabel, defaultLabel, initialOutput: newInitialOutput, disconnected: false });
+                      setActiveTerminalTab(serverId, newTabId);
+                    } catch (e) {
+                      const msg = formatIpcError(e);
+                      toast.error(t("server.terminal_open_failed"), { description: msg });
+                    }
+                  }}
+                >
+                  {t("server.reconnect_terminal")}
+                </button>
+            </div>
+          )}
         </div>
       ))}
     </div>

@@ -46,6 +46,7 @@ export interface ReconnectConfig {
   auto_reconnect: boolean;
   heartbeat_interval: number;
   max_attempts: number;
+  reconnect_timeout_secs: number;
   initial_backoff_secs: number;
   max_backoff_secs: number;
 }

@@ -849,6 +849,33 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
     // When no ZMODEM session is active: feed to Sentry AND write raw data.
     // When a session IS active: only feed to Sentry; to_terminal handles output.
     // During cooldown: skip Sentry entirely, write raw data directly.
+    //
+    // Normal shell output is batched via requestAnimationFrame to avoid
+    // flooding the main thread with high-frequency term.write() calls when
+    // the server outputs large amounts of data (e.g. cat a huge file).
+    // ZMODEM data is NOT batched — it needs immediate processing.
+    let pendingChunks: Uint8Array[] = [];
+    let flushScheduled = false;
+
+    const flushPending = () => {
+      flushScheduled = false;
+      if (pendingChunks.length === 0) return;
+      if (pendingChunks.length === 1) {
+        term.write(pendingChunks[0]);
+      } else {
+        // Merge all pending chunks into one write
+        const total = pendingChunks.reduce((s, c) => s + c.length, 0);
+        const merged = new Uint8Array(total);
+        let offset = 0;
+        for (const chunk of pendingChunks) {
+          merged.set(chunk, offset);
+          offset += chunk.length;
+        }
+        term.write(merged);
+      }
+      pendingChunks = [];
+    };
+
     let unlistenOutput: UnlistenFn | undefined;
     listen<{ sessionId: string; data: string; stderr: boolean }>(
       "terminal:output",
@@ -864,7 +891,12 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
             // Strip any leading ZMODEM headers (e.g. echoed ZFIN) so they
             // don't appear as shell commands on the terminal.
             const clean = stripLeadingZmodemHeaders(Array.from(rawBytes));
-            term.write(clean.length ? new Uint8Array(clean) : new Uint8Array(0));
+            const cleanBytes = clean.length ? new Uint8Array(clean) : new Uint8Array(0);
+            pendingChunks.push(cleanBytes);
+            if (!flushScheduled) {
+              flushScheduled = true;
+              requestAnimationFrame(flushPending);
+            }
             return;
           }
 
@@ -873,9 +905,13 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
           } catch (e) {
             console.error("[ZMODEM] sentry consume error:", e);
           }
-          // No session before or after → normal shell output, write directly
+          // No session before or after → normal shell output, batch via rAF
           if (!hadSession && !zmodemSession) {
-            term.write(rawBytes);
+            pendingChunks.push(rawBytes);
+            if (!flushScheduled) {
+              flushScheduled = true;
+              requestAnimationFrame(flushPending);
+            }
           }
           // Session ended during this chunk — clear Sentry, set cooldown, and
           // let to_terminal handle the trailing bytes. Do NOT write rawBytes
@@ -907,6 +943,8 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
     term.focus();
 
     return () => {
+      // Flush any pending chunks before disposing
+      flushPending();
       inputDisposable.dispose();
       resizeDisposable.dispose();
       if (unlistenOutput) unlistenOutput();

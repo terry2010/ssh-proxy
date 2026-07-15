@@ -115,44 +115,84 @@ impl TerminalManager {
         let read_fwd = fwd.clone();
         let read_task = tokio::spawn(async move {
             tracing::info!("terminal read task started for {}", read_sid);
-            loop {
-                let msg = read_half.wait().await;
-                tracing::info!("channel.wait() returned {:?} for session {}", msg, read_sid);
-                match msg {
-                    Some(ChannelMsg::Data { ref data }) => {
-                        let output = base64::engine::general_purpose::STANDARD.encode(data);
-                        tracing::info!("terminal data len={} (base64={}) for session {}", data.len(), output.len(), read_sid);
+            // Buffer for merging small Data packets within a short time window.
+            // This reduces the number of emit events (and base64 encode calls)
+            // when the server outputs many small chunks in rapid succession.
+            let mut data_buf: Vec<u8> = Vec::new();
+            let mut stderr_buf: Vec<u8> = Vec::new();
+            let mut has_pending: bool = false;
+
+            // Helper closure to flush pending buffers
+            macro_rules! flush_buffers {
+                () => {{
+                    if !data_buf.is_empty() {
+                        let output = base64::engine::general_purpose::STANDARD.encode(&data_buf);
+                        tracing::trace!("terminal data len={} (base64={}) for session {}", data_buf.len(), output.len(), read_sid);
                         forward_terminal_output(&read_fwd, &read_sid, &output, false);
+                        data_buf.clear();
                     }
-                    Some(ChannelMsg::ExtendedData { ref data, .. }) => {
-                        let output = base64::engine::general_purpose::STANDARD.encode(data);
-                        tracing::info!("terminal ext data len={} (base64={}) for session {}", data.len(), output.len(), read_sid);
+                    if !stderr_buf.is_empty() {
+                        let output = base64::engine::general_purpose::STANDARD.encode(&stderr_buf);
+                        tracing::trace!("terminal ext data len={} (base64={}) for session {}", stderr_buf.len(), output.len(), read_sid);
                         forward_terminal_output(&read_fwd, &read_sid, &output, true);
+                        stderr_buf.clear();
                     }
-                    Some(ChannelMsg::Success) => {
-                        tracing::info!("terminal Success for session {}", read_sid);
+                    has_pending = false;
+                    let _ = has_pending;
+                }};
+            }
+
+            loop {
+                // If we have pending data, race a flush timer against the next
+                // channel message. This batches small Data packets within a 5ms
+                // window to reduce emit events and base64 encode calls.
+                let flush_delay_ms = if has_pending { 5u64 } else { u64::MAX };
+
+                tokio::select! {
+                    biased; // Check timer first so we flush before processing new data
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(flush_delay_ms)) => {
+                        flush_buffers!();
                     }
-                    Some(ChannelMsg::Failure) => {
-                        tracing::warn!("terminal Failure for session {}", read_sid);
-                    }
-                    Some(ChannelMsg::ExitStatus { exit_status }) => {
-                        tracing::info!("terminal exit_status={} for session {}", exit_status, read_sid);
-                    }
-                    Some(ChannelMsg::Eof) => {
-                        tracing::info!("terminal EOF for session {}", read_sid);
-                    }
-                    Some(ChannelMsg::Close) => {
-                        tracing::info!("terminal Close for session {}", read_sid);
-                        forward_terminal_closed(&read_fwd, &read_sid);
-                        break;
-                    }
-                    None => {
-                        tracing::info!("terminal channel None for session {}", read_sid);
-                        forward_terminal_closed(&read_fwd, &read_sid);
-                        break;
-                    }
-                    Some(other) => {
-                        tracing::info!("terminal other msg: {:?} for session {}", other, read_sid);
+                    msg = read_half.wait() => {
+                        match msg {
+                            Some(ChannelMsg::Data { ref data }) => {
+                                data_buf.extend_from_slice(data);
+                                has_pending = true;
+                            }
+                            Some(ChannelMsg::ExtendedData { ref data, .. }) => {
+                                stderr_buf.extend_from_slice(data);
+                                has_pending = true;
+                            }
+                            Some(ChannelMsg::Success) => {
+                                tracing::debug!("terminal Success for session {}", read_sid);
+                            }
+                            Some(ChannelMsg::Failure) => {
+                                tracing::warn!("terminal Failure for session {}", read_sid);
+                            }
+                            Some(ChannelMsg::ExitStatus { exit_status }) => {
+                                flush_buffers!();
+                                tracing::info!("terminal exit_status={} for session {}", exit_status, read_sid);
+                            }
+                            Some(ChannelMsg::Eof) => {
+                                flush_buffers!();
+                                tracing::info!("terminal EOF for session {}", read_sid);
+                            }
+                            Some(ChannelMsg::Close) => {
+                                flush_buffers!();
+                                tracing::info!("terminal Close for session {}", read_sid);
+                                forward_terminal_closed(&read_fwd, &read_sid);
+                                break;
+                            }
+                            None => {
+                                flush_buffers!();
+                                tracing::info!("terminal channel None for session {}", read_sid);
+                                forward_terminal_closed(&read_fwd, &read_sid);
+                                break;
+                            }
+                            Some(other) => {
+                                tracing::debug!("terminal other msg: {:?} for session {}", other, read_sid);
+                            }
+                        }
                     }
                 }
             }

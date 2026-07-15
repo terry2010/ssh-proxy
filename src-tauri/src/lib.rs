@@ -332,6 +332,7 @@ async fn ipc_update_server(
     mixed_port: Option<u16>,
     ssh: Option<serde_json::Value>,
     auto_reconnect: Option<bool>,
+    reconnect_timeout_secs: Option<u64>,
 ) -> Result<serde_json::Value, String> {
     let mut params = serde_json::json!({ "server_id": server_id });
     if let Some(n) = name { params["name"] = serde_json::json!(n); }
@@ -340,6 +341,7 @@ async fn ipc_update_server(
     if let Some(p) = mixed_port { params["mixed_port"] = serde_json::json!(p); }
     if let Some(s) = ssh { params["ssh"] = s; }
     if let Some(v) = auto_reconnect { params["auto_reconnect"] = serde_json::json!(v); }
+    if let Some(v) = reconnect_timeout_secs { params["reconnect_timeout_secs"] = serde_json::json!(v); }
     forward_to_daemon(
         &state,
         termfast_daemon::proto::Action::UpdateServer,

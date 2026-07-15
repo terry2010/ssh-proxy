@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 /// Current config schema version supported by this software
-pub const CURRENT_VERSION: u32 = 1;
+pub const CURRENT_VERSION: u32 = 2;
 
 /// Migrate config JSON from `from_version` to current version.
 /// Chain migration: v1→v2→v3... (§17.5)
@@ -26,9 +26,11 @@ pub fn migrate(config: &mut Value, from_version: u32) -> Result<()> {
     let mut current = from_version;
     while current < CURRENT_VERSION {
         let backup = config.clone();
-        // v1→v2: future migration placeholder
-        // 1 => migrate_v1_to_v2(config),
-        let result: Result<()> = Ok(());
+        let result: Result<()> = match current {
+            // v1→v2: upgrade reconnect config to new defaults
+            1 => migrate_v1_to_v2(config),
+            _ => Ok(()),
+        };
 
         if let Err(e) = result {
             tracing::error!("migration v{}→v{} failed: {}, rolling back", current, current + 1, e);
@@ -46,6 +48,42 @@ pub fn migrate(config: &mut Value, from_version: u32) -> Result<()> {
         *version = serde_json::Value::from(CURRENT_VERSION);
     }
 
+    Ok(())
+}
+
+/// v1→v2: Upgrade all servers' reconnect config to new defaults.
+/// Old defaults had heartbeat_interval=15-30, max_attempts=5-10.
+/// New defaults: heartbeat_interval=10, max_attempts=999, max_backoff_secs=60.
+fn migrate_v1_to_v2(config: &mut Value) -> Result<()> {
+    if let Some(servers) = config.get_mut("servers").and_then(|s| s.as_array_mut()) {
+        for server in servers.iter_mut() {
+            if let Some(reconnect) = server.get_mut("reconnect") {
+                // heartbeat_interval: old 15-30 → 10
+                if let Some(hi) = reconnect.get("heartbeat_interval").and_then(|v| v.as_u64()) {
+                    if hi > 10 {
+                        reconnect["heartbeat_interval"] = serde_json::Value::from(10u64);
+                    }
+                }
+                // max_attempts: old 5-10 → 999 (effectively unlimited)
+                if let Some(ma) = reconnect.get("max_attempts").and_then(|v| v.as_u64()) {
+                    if ma < 999 {
+                        reconnect["max_attempts"] = serde_json::Value::from(999u64);
+                    }
+                }
+                // max_backoff_secs: old 30-300 → 60
+                if let Some(mb) = reconnect.get("max_backoff_secs").and_then(|v| v.as_u64()) {
+                    if mb > 60 {
+                        reconnect["max_backoff_secs"] = serde_json::Value::from(60u64);
+                    }
+                }
+                // reconnect_timeout_secs: add if missing (default 24h = 86400)
+                if reconnect.get("reconnect_timeout_secs").is_none() {
+                    reconnect["reconnect_timeout_secs"] = serde_json::Value::from(86400u64);
+                }
+            }
+        }
+    }
+    tracing::info!("migrated v1→v2: upgraded reconnect config for all servers");
     Ok(())
 }
 
@@ -149,9 +187,9 @@ mod tests {
 
     #[test]
     fn test_migrate_same_version_noop() {
-        let mut config = serde_json::json!({"version": 1, "servers": []});
-        migrate(&mut config, 1).unwrap();
-        assert_eq!(config["version"], 1);
+        let mut config = serde_json::json!({"version": 2, "servers": []});
+        migrate(&mut config, 2).unwrap();
+        assert_eq!(config["version"], 2);
     }
 
     #[test]
@@ -181,7 +219,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nonexistent.json");
         let config = load_config_with_migration(&path).unwrap();
-        assert_eq!(config.version, 1);
+        assert_eq!(config.version, 2);
         assert!(config.servers.is_empty());
     }
 
@@ -192,7 +230,7 @@ mod tests {
         std::fs::write(&path, "{ invalid json }").unwrap();
 
         let config = load_config_with_migration(&path).unwrap();
-        assert_eq!(config.version, 1);
+        assert_eq!(config.version, 2);
         // Corrupt file should have been backed up
         let entries = std::fs::read_dir(dir.path()).unwrap();
         let has_backup = entries

@@ -29,6 +29,7 @@ function mockServer(id: string, name: string, status: ServerState["current_statu
       auto_reconnect: true,
       heartbeat_interval: 15,
       max_attempts: 10,
+      reconnect_timeout_secs: 86400,
       initial_backoff_secs: 1,
       max_backoff_secs: 300,
     },

@@ -137,10 +137,12 @@ export function AddServerDialog({ onAdd, onCancel, editServer }: AddServerDialog
               channel_idle_timeout: 300,
             },
             reconnect: {
-              heartbeat_interval: 15,
-              max_attempts: 10,
+              auto_reconnect: true,
+              heartbeat_interval: 10,
+              max_attempts: 999,
+              reconnect_timeout_secs: 86400,
               initial_backoff_secs: 1,
-              max_backoff_secs: 300,
+              max_backoff_secs: 60,
             },
             ip_check: {
               enabled: true,
