@@ -203,9 +203,6 @@ jobs:
         with:
           node-version: 20
 
-      - name: Wait for release to be available
-        run: sleep 60
-
       - name: Generate latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

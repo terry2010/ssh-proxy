@@ -55,19 +55,35 @@ async function downloadText(url) {
   return res.text();
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function main() {
   // Draft releases are not accessible via /releases/tags/{tag}, so list all releases
-  // and find the one matching our tag.
+  // and find the one matching our tag. Retry for up to 5 minutes in case assets
+  // are still being uploaded by upstream jobs.
   const listUrl = `https://api.github.com/repos/${owner}/${repoName}/releases?per_page=100`;
-  console.log(`Fetching releases list...`);
-  const releases = await githubApi(listUrl);
-  const release = releases.find((r) => r.tag_name === tag);
+  let release = null;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    console.log(`Fetching releases list (attempt ${attempt + 1}/10)...`);
+    const releases = await githubApi(listUrl);
+    release = releases.find((r) => r.tag_name === tag);
+    if (!release) {
+      console.error(`Release with tag ${tag} not found among ${releases.length} releases.`);
+      console.error("Available tags:", releases.map((r) => r.tag_name).join(", "));
+      await sleep(30000);
+      continue;
+    }
+    console.log(`Found release: ${release.tag_name} (draft=${release.draft}, assets=${release.assets.length})`);
+    if (release.assets.length > 0) break;
+    console.log("No assets yet, waiting 30s...");
+    await sleep(30000);
+  }
   if (!release) {
-    console.error(`Release with tag ${tag} not found among ${releases.length} releases.`);
-    console.error("Available tags:", releases.map((r) => r.tag_name).join(", "));
+    console.error(`Release ${tag} never appeared.`);
     process.exit(1);
   }
-  console.log(`Found release: ${release.tag_name} (draft=${release.draft})`);
 
   /** @type {Record<string, { signature: string; url: string }>} */
   const platforms = {};
