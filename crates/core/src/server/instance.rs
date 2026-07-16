@@ -186,6 +186,11 @@ impl ServerInstance {
         *self.triggers.lock().await = triggers;
     }
 
+    /// Set the socket protector (Android VpnService.protect hook)
+    pub async fn set_socket_protector(&self, protector: Arc<dyn crate::ssh::SocketProtector>) {
+        self.ssh_client.set_socket_protector(Some(protector)).await;
+    }
+
     /// Set callback for trigger execution results (to broadcast to frontend)
     pub async fn set_trigger_result_callback(
         &self,
@@ -752,6 +757,20 @@ impl ServerInstance {
                                     tracing::warn!("failed to persist last_known_ip: {}", e);
                                 }
                             }
+
+                            // Emit IP change event to platform (for notifications)
+                            #[cfg(target_os = "android")]
+                            {
+                                let event_json = serde_json::json!({
+                                    "type": "ip:changed",
+                                    "server_id": server_id,
+                                    "server_name": server_name,
+                                    "old_ip": old_ip,
+                                    "new_ip": new_ip,
+                                }).to_string();
+                                crate::platform::emit_event(&event_json);
+                            }
+
                             let event = TriggerEvent {
                                 server_id: server_id.clone(),
                                 server_name: server_name.clone(),

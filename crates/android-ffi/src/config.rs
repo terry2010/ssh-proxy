@@ -4,14 +4,12 @@
 //! directory passed in from Kotlin (`context.getFilesDir()`).
 
 use std::path::PathBuf;
-use std::sync::Arc;
-use termfast_core::config::{Config, ConfigManager, FileConfigStorage, RuntimeStateManager};
+use termfast_core::config::{ConfigManager, RuntimeStateManager};
 
 pub fn config_manager_for_dir(dir: PathBuf) -> anyhow::Result<ConfigManager> {
     let config_path = dir.join("config.json");
-    let storage = Arc::new(FileConfigStorage::new(config_path));
-    let config = Config::default();
-    Ok(ConfigManager::with_storage(config, storage))
+    let cm = ConfigManager::load(&config_path)?;
+    Ok(cm)
 }
 
 pub fn runtime_state_manager_for_dir(dir: PathBuf) -> RuntimeStateManager {

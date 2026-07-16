@@ -455,6 +455,13 @@ pub struct ServerConfig {
     pub triggers: Vec<TriggerInstance>,
     #[serde(default)]
     pub suppress_firewall_badge: bool,
+    /// URL used by the test button in the server list / detail screen.
+    #[serde(default = "default_server_test_url")]
+    pub test_url: String,
+}
+
+fn default_server_test_url() -> String {
+    "https://google.com".to_string()
 }
 
 // === SECTION 2 END ===

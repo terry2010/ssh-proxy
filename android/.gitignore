@@ -1,0 +1,32 @@
+# Gradle
+.gradle/
+.kotlin/
+build/
+out/
+captures/
+
+# 本地 SDK 路径配置
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# OS / 日志
+.DS_Store
+*.log
+
+# 签名密钥库
+*.jks
+*.keystore
+app/keystores/
+
+# Rust 编译产物
+*.so
+app/src/main/jniLibs/
+
+# 输出包
+*.apk
+*.aab

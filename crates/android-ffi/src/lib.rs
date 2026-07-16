@@ -6,14 +6,14 @@
 //! storage, and the tokio runtime.
 
 #[cfg(target_os = "android")]
-use jni::JavaVM;
+use ::jni::JavaVM;
 #[cfg(target_os = "android")]
 use std::sync::OnceLock;
-use std::ffi::c_void;
 
 pub mod config;
 pub mod credential;
 pub mod event;
+pub mod jni;
 pub mod network;
 pub mod proxy_api;
 pub mod runtime;
@@ -30,36 +30,16 @@ pub fn jvm() -> Option<&'static JavaVM> {
 
 /// Initialize the global `JavaVM` reference. Called once from `JNI_OnLoad`.
 #[cfg(target_os = "android")]
-pub fn set_jvm(vm: JavaVM) -> jni::errors::Result<()> {
+pub fn set_jvm(vm: JavaVM) -> ::jni::errors::Result<()> {
     let _ = GLOBAL_JVM.set(vm);
     Ok(())
 }
 
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn JNI_OnLoad(_vm: JavaVM, _reserved: *mut c_void) -> jni::sys::jint {
+pub unsafe extern "C" fn JNI_OnLoad(vm: JavaVM, _reserved: *mut std::ffi::c_void) -> ::jni::sys::jint {
     use crate::runtime::init_android_logging;
+    let _ = crate::jni::set_jvm(vm);
     init_android_logging();
-    jni::sys::JNI_VERSION_1_6
+    ::jni::sys::JNI_VERSION_1_6
 }
-
-#[cfg(target_os = "android")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeInit(
-    _env: *mut jni::sys::JNIEnv,
-    _class: jni::sys::jclass,
-) {
-    crate::runtime::init_android_logging();
-}
-
-#[cfg(target_os = "android")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativePing(
-    _env: *mut jni::sys::JNIEnv,
-    _class: jni::sys::jclass,
-) -> jni::sys::jint {
-    42
-}
-
-#[cfg(not(target_os = "android"))]
-use std::ffi::c_void;

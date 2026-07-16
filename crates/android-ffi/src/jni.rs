@@ -1,0 +1,795 @@
+//! JNI function implementations for TermFast Android FFI.
+//!
+//! All `Java_com_termfast_app_RustBridge_*` functions are declared here.
+//! They bridge Kotlin calls to `termfast-core` business logic.
+
+#![cfg(target_os = "android")]
+
+use crate::runtime::runtime;
+use ::jni::objects::{JClass, JObject, JString, GlobalRef};
+use ::jni::sys::{jboolean, jint, jstring, JNI_FALSE, JNI_TRUE};
+use ::jni::JNIEnv;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::Mutex;
+use termfast_core::config::{Config, ConfigManager, ServerConfig as CoreServerConfig, TriggerInstance};
+use termfast_core::server::ServerInstance;
+use termfast_credential::CredentialStore;
+
+/// Global state holder for the FFI layer.
+struct FfiState {
+    data_dir: String,
+    config_manager: Option<ConfigManager>,
+    servers: std::collections::HashMap<String, Arc<ServerInstance>>,
+    event_callback: Option<GlobalRef>,
+}
+
+static STATE: OnceLock<Mutex<FfiState>> = OnceLock::new();
+
+fn state() -> &'static Mutex<FfiState> {
+    STATE.get_or_init(|| {
+        Mutex::new(FfiState {
+            data_dir: String::new(),
+            config_manager: None,
+            servers: std::collections::HashMap::new(),
+            event_callback: None,
+        })
+    })
+}
+
+fn jstring_to_string(env: &mut JNIEnv, s: &JString) -> String {
+    env.get_string(s)
+        .map(|cs| cs.to_str().unwrap_or("").to_string())
+        .unwrap_or_default()
+}
+
+fn string_to_jstring<'a>(env: &mut JNIEnv<'a>, s: &str) -> JString<'a> {
+    env.new_string(s).unwrap_or_else(|_| env.new_string("").unwrap())
+}
+
+fn bool_to_jbool(b: bool) -> jboolean {
+    if b { JNI_TRUE } else { JNI_FALSE }
+}
+
+/// Dispatch an event JSON to the Kotlin callback (if set).
+/// Called from the tracing layer and other event emitters.
+pub fn dispatch_event_to_kotlin(json: &str) {
+    let callback = {
+        let st = state().lock().unwrap();
+        st.event_callback.clone()
+    };
+    if let Some(global) = callback {
+        let vm = match JNI_JVM.get() {
+            Some(vm) => vm,
+            None => return,
+        };
+        let mut env = match vm.attach_current_thread() {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        let listener = global.as_obj();
+        let json_jstring = env.new_string(json).unwrap_or_else(|_| env.new_string("").unwrap());
+        let _ = env.call_method(listener, "onEvent", "(Ljava/lang/String;)V", &[::jni::objects::JValue::Object(&json_jstring)]);
+    }
+}
+
+/// Convenience: send a log entry to Kotlin (if callback is set).
+#[cfg(target_os = "android")]
+pub fn log_to_kotlin(level: &str, msg: &str) {
+    crate::event::RustEvent::log(level, "termfast", msg);
+}
+
+// === JNI_OnLoad JVM storage ===
+
+#[cfg(target_os = "android")]
+static JNI_JVM: OnceLock<::jni::JavaVM> = OnceLock::new();
+
+#[cfg(target_os = "android")]
+pub fn set_jvm(vm: ::jni::JavaVM) {
+    let _ = JNI_JVM.set(vm);
+}
+
+// === Native functions ===
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeInit(
+    mut _env: JNIEnv,
+    _class: JClass,
+) {
+    crate::runtime::init_android_logging();
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativePing(
+    mut _env: JNIEnv,
+    _class: JClass,
+) -> jint {
+    42
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeSetDataDir(
+    mut env: JNIEnv,
+    _class: JClass,
+    path: JString,
+) {
+    let dir = jstring_to_string(&mut env, &path);
+    let mut st = state().lock().unwrap();
+    st.data_dir = dir.clone();
+    // Initialize credential store for this data directory
+    crate::credential::init_credential_store(&dir);
+    // Initialize config manager for this data directory
+    let path_buf = std::path::PathBuf::from(&dir);
+    if let Ok(cm) = crate::config::config_manager_for_dir(path_buf) {
+        let rt = runtime();
+        let config = cm.get_blocking();
+        let templates = config.trigger_templates.clone();
+        for server in config.servers.iter() {
+            let instance = Arc::new(ServerInstance::new(server.clone()));
+            let _ = rt.block_on(instance.set_trigger_templates(templates.clone()));
+            let _ = rt.block_on(instance.set_socket_protector(Arc::new(crate::network::AndroidSocketProtector)));
+            st.servers.insert(server.id.clone(), instance);
+        }
+        st.config_manager = Some(cm);
+    }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeGetConfigJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let st = state().lock().unwrap();
+    let json = if let Some(ref cm) = st.config_manager {
+        let config = cm.get_blocking();
+        serde_json::to_string(&config).unwrap_or_default()
+    } else {
+        serde_json::to_string(&Config::default()).unwrap_or_default()
+    };
+    string_to_jstring(&mut env, &json).into_raw()
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeSaveConfigJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    json: JString,
+) -> jboolean {
+    let json_str = jstring_to_string(&mut env, &json);
+    let result = serde_json::from_str::<Config>(&json_str)
+        .map(|cfg| {
+            let st = state().lock().unwrap();
+            if let Some(ref cm) = st.config_manager {
+                let rt = runtime();
+                rt.block_on(cm.modify(|c| *c = cfg))
+                    .map_err(|e| std::io::Error::other(e.to_string()))
+            } else {
+                Ok(())
+            }
+        });
+    bool_to_jbool(result.is_ok())
+}
+
+// === Server lifecycle ===
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeAddServer(
+    mut env: JNIEnv,
+    _class: JClass,
+    json: JString,
+) -> jstring {
+    let json_str = jstring_to_string(&mut env, &json);
+    let server: CoreServerConfig = match serde_json::from_str(&json_str) {
+        Ok(s) => s,
+        Err(_) => return string_to_jstring(&mut env, "").into_raw(),
+    };
+    let id = server.id.clone();
+    let mut st = state().lock().unwrap();
+    let templates = if let Some(ref cm) = st.config_manager {
+        let rt = runtime();
+        let _ = rt.block_on(cm.modify(|cfg| {
+            cfg.servers.push(server.clone());
+        }));
+        let cfg = cm.get_blocking();
+        cfg.trigger_templates.clone()
+    } else {
+        Vec::new()
+    };
+    // Create a ServerInstance for runtime management
+    let instance = Arc::new(ServerInstance::new(server));
+    let rt = runtime();
+    let _ = rt.block_on(instance.set_trigger_templates(templates));
+    let _ = rt.block_on(instance.set_socket_protector(Arc::new(crate::network::AndroidSocketProtector)));
+    st.servers.insert(id.clone(), instance);
+    string_to_jstring(&mut env, &id).into_raw()
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeUpdateServer(
+    mut env: JNIEnv,
+    _class: JClass,
+    json: JString,
+) -> jboolean {
+    let json_str = jstring_to_string(&mut env, &json);
+    let server: CoreServerConfig = match serde_json::from_str(&json_str) {
+        Ok(s) => s,
+        Err(_) => return bool_to_jbool(false),
+    };
+    let id = server.id.clone();
+    let mut st = state().lock().unwrap();
+    // Update config
+    if let Some(ref cm) = st.config_manager {
+        let rt = runtime();
+        let _ = rt.block_on(cm.modify(|cfg| {
+            if let Some(slot) = cfg.servers.iter_mut().find(|s| s.id == id) {
+                *slot = server.clone();
+            }
+        }));
+    }
+    // Config is persisted above; runtime instance doesn't need test_url update
+    bool_to_jbool(true)
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeRemoveServer(
+    mut _env: JNIEnv,
+    _class: JClass,
+    id: JString,
+) -> jboolean {
+    let id_str = jstring_to_string(&mut _env, &id);
+    let mut st = state().lock().unwrap();
+    // Remove from config
+    if let Some(ref cm) = st.config_manager {
+        let rt = runtime();
+        let _ = rt.block_on(cm.modify(|cfg| {
+            cfg.servers.retain(|s| s.id != id_str);
+        }));
+    }
+    // Remove runtime instance
+    st.servers.remove(&id_str);
+    bool_to_jbool(true)
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeListServers(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let st = state().lock().unwrap();
+    let json = if let Some(ref cm) = st.config_manager {
+        let config = cm.get_blocking();
+        serde_json::to_string(&config.servers).unwrap_or_default()
+    } else {
+        serde_json::to_string::<Vec<CoreServerConfig>>(&vec![]).unwrap_or_default()
+    };
+    string_to_jstring(&mut env, &json).into_raw()
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeConnectServer(
+    mut _env: JNIEnv,
+    _class: JClass,
+    id: JString,
+) -> jboolean {
+    use termfast_core::ssh::auth::AuthMethod;
+
+    let id_str = jstring_to_string(&mut _env, &id);
+    let (instance, data_dir) = {
+        let st = state().lock().unwrap();
+        let instance = match st.servers.get(&id_str).cloned() {
+            Some(i) => i,
+            None => return bool_to_jbool(false),
+        };
+        (instance, st.data_dir.clone())
+    };
+
+    let store = crate::credential::android_credential_store();
+    let auth = if instance.config.ssh.auth_method == "key" {
+        let key_content = store.load(&termfast_credential::make_key(&id_str, "key")).unwrap_or_default();
+        let passphrase = store.load(&termfast_credential::make_key(&id_str, "key_passphrase")).ok();
+        if key_content.is_empty() {
+            tracing::error!("No key credential for {}", id_str);
+            return bool_to_jbool(false);
+        }
+        let key_dir = std::path::PathBuf::from(&data_dir).join("keys").join(&id_str);
+        let _ = std::fs::create_dir_all(&key_dir);
+        let key_path = key_dir.join("id_ed25519");
+        let _ = std::fs::write(&key_path, key_content);
+        AuthMethod::Key {
+            key_path: key_path.to_string_lossy().to_string(),
+            passphrase,
+        }
+    } else {
+        let password = store.load(&termfast_credential::make_key(&id_str, "password")).unwrap_or_default();
+        AuthMethod::Password { password }
+    };
+
+    let rt = runtime();
+    log_to_kotlin("info", &format!("Connecting to SSH server {}...", id_str));
+    let result = rt.block_on(async {
+        match instance.connect(&auth).await {
+            Ok(()) => {
+                instance.start_connection_monitor().await;
+                log_to_kotlin("info", "SSH connected successfully");
+                Ok(())
+            }
+            Err(e) => {
+                log_to_kotlin("error", &format!("SSH connect failed: {:?}", e));
+                Err(e)
+            }
+        }
+    });
+    bool_to_jbool(result.is_ok())
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeDisconnectServer(
+    mut _env: JNIEnv,
+    _class: JClass,
+    id: JString,
+) -> jboolean {
+    let id_str = jstring_to_string(&mut _env, &id);
+    let instance = {
+        let st = state().lock().unwrap();
+        st.servers.get(&id_str).cloned()
+    };
+    if let Some(instance) = instance {
+        let rt = runtime();
+        let _ = rt.block_on(instance.disconnect());
+        bool_to_jbool(true)
+    } else {
+        bool_to_jbool(false)
+    }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeGetServerStatus(
+    mut env: JNIEnv,
+    _class: JClass,
+    id: JString,
+) -> jstring {
+    let id_str = jstring_to_string(&mut env, &id);
+    let instance = {
+        let st = state().lock().unwrap();
+        st.servers.get(&id_str).cloned()
+    };
+    let status = if let Some(instance) = instance {
+        let rt = runtime();
+        let s = rt.block_on(instance.status());
+        serde_json::json!({
+            "server_id": id_str,
+            "status": format!("{:?}", s).to_lowercase(),
+        })
+        .to_string()
+    } else {
+        serde_json::json!({
+            "server_id": id_str,
+            "status": "disconnected",
+        })
+        .to_string()
+    };
+    string_to_jstring(&mut env, &status).into_raw()
+}
+
+// === Proxy ===
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeStartProxy(
+    mut _env: JNIEnv,
+    _class: JClass,
+    id: JString,
+    _socks5_port: jint,
+    _http_port: jint,
+    _mixed_port: jint,
+) -> jboolean {
+    let id_str = jstring_to_string(&mut _env, &id);
+    // Clone instance and release lock before block_on to avoid blocking other JNI calls
+    let instance = {
+        let st = state().lock().unwrap();
+        st.servers.get(&id_str).cloned()
+    };
+    if let Some(instance) = instance {
+        let rt = runtime();
+        log_to_kotlin("info", &format!("Starting proxy for server {}...", id_str));
+        match rt.block_on(instance.start_proxy()) {
+            Ok(_) => {
+                log_to_kotlin("info", "Proxy started successfully");
+                bool_to_jbool(true)
+            }
+            Err(e) => {
+                log_to_kotlin("error", &format!("Proxy start failed: {:?}", e));
+                bool_to_jbool(false)
+            }
+        }
+    } else {
+        bool_to_jbool(false)
+    }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeStopProxy(
+    mut _env: JNIEnv,
+    _class: JClass,
+    id: JString,
+) -> jboolean {
+    let id_str = jstring_to_string(&mut _env, &id);
+    let instance = {
+        let st = state().lock().unwrap();
+        st.servers.get(&id_str).cloned()
+    };
+    if let Some(instance) = instance {
+        let rt = runtime();
+        let _ = rt.block_on(instance.stop_proxy());
+        bool_to_jbool(true)
+    } else {
+        bool_to_jbool(false)
+    }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeIsProxyRunning(
+    mut _env: JNIEnv,
+    _class: JClass,
+    id: JString,
+) -> jboolean {
+    let id_str = jstring_to_string(&mut _env, &id);
+    let instance = {
+        let st = state().lock().unwrap();
+        st.servers.get(&id_str).cloned()
+    };
+    if let Some(instance) = instance {
+        let rt = runtime();
+        let running = rt.block_on(instance.is_proxy_running());
+        bool_to_jbool(running)
+    } else {
+        bool_to_jbool(false)
+    }
+}
+
+// === VPN ===
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeStartVpn(
+    mut _env: JNIEnv,
+    _class: JClass,
+    id: JString,
+    _tun_fd: jint,
+    _mtu: jint,
+    _socks5_port: jint,
+    dns_strategy: JString,
+    ipv6_enabled: jboolean,
+) -> jboolean {
+    let id_str = jstring_to_string(&mut _env, &id);
+    let tun_fd = _tun_fd;
+    let mtu = _mtu as u16;
+    let socks5_port = _socks5_port as u16;
+    let dns = jstring_to_string(&mut _env, &dns_strategy);
+    let ipv6 = ipv6_enabled == JNI_TRUE;
+    log_to_kotlin("info", &format!("Starting tun2proxy: fd={}, mtu={}, socks5={}, dns={}, ipv6={}",
+        tun_fd, mtu, socks5_port, dns, ipv6));
+    let rt = runtime();
+    // Spawn the tun2proxy task — it runs until stop_tun2proxy is called
+    let handle = rt.spawn(async move {
+        if let Err(e) = crate::vpn::start_tun2proxy(tun_fd, mtu, socks5_port, &dns, ipv6).await {
+            log_to_kotlin("error", &format!("tun2proxy failed: {:?}", e));
+        }
+    });
+    // Store the task handle so stop_tun2proxy can await it
+    crate::vpn::set_vpn_task(handle);
+    bool_to_jbool(true)
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeStopVpn(
+    mut _env: JNIEnv,
+    _class: JClass,
+    _id: JString,
+) -> jboolean {
+    tracing::info!("nativeStopVpn");
+    let rt = runtime();
+    rt.block_on(crate::vpn::stop_tun2proxy());
+    bool_to_jbool(true)
+}
+
+// === Event subscription ===
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeSetEventListener(
+    env: JNIEnv,
+    _class: JClass,
+    listener: JObject,
+) {
+    // Create a global reference to the listener object so it survives across JNI calls
+    let global = env.new_global_ref(listener).ok();
+    let mut st = state().lock().unwrap();
+    st.event_callback = global;
+
+    // Also set the core platform event callback so core can emit events
+    termfast_core::platform::set_event_callback(std::sync::Arc::new(|json: &str| {
+        dispatch_event_to_kotlin(json);
+    }));
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeSetProtectCallback(
+    env: JNIEnv,
+    _class: JClass,
+    vpn_service: JObject,
+) {
+    // Store a global ref to the VpnService so we can call protect(fd) on it
+    let global = match env.new_global_ref(vpn_service) {
+        Ok(g) => g,
+        Err(e) => {
+            tracing::error!("Failed to create global ref for VpnService: {:?}", e);
+            return;
+        }
+    };
+    let callback: Box<dyn Fn(i32) -> bool + Send + Sync> = Box::new(move |fd: i32| {
+        call_vpn_protect(&global, fd)
+    });
+    crate::network::set_protect_callback(callback);
+    tracing::info!("Protect callback set");
+}
+
+#[cfg(target_os = "android")]
+fn call_vpn_protect(vpn_service: &GlobalRef, fd: i32) -> bool {
+    use ::jni::objects::JValue;
+    let vm = match JNI_JVM.get() {
+        Some(vm) => vm,
+        None => {
+            tracing::error!("No JVM available for protect call");
+            return false;
+        }
+    };
+    let mut env = match vm.attach_current_thread() {
+        Ok(env) => env,
+        Err(e) => {
+            tracing::error!("Failed to attach thread for protect: {:?}", e);
+            return false;
+        }
+    };
+    // Call VpnService.protect(int) : boolean
+    let service = vpn_service.as_obj();
+    match env.call_method(service, "protect", "(I)Z", &[JValue::Int(fd)]) {
+        Ok(val) => val.z().unwrap_or(false),
+        Err(e) => {
+            tracing::error!("VpnService.protect() failed: {:?}", e);
+            false
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeClearProtectCallback(
+    _env: JNIEnv,
+    _class: JClass,
+) {
+    crate::network::clear_protect_callback();
+    tracing::info!("Protect callback cleared");
+}
+
+// === Credentials ===
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeSaveCredential(
+    mut env: JNIEnv,
+    _class: JClass,
+    server_id: JString,
+    cred_type: JString,
+    value: JString,
+) -> jboolean {
+    let sid = jstring_to_string(&mut env, &server_id);
+    let ct = jstring_to_string(&mut env, &cred_type);
+    let val = jstring_to_string(&mut env, &value);
+    let store = crate::credential::android_credential_store();
+    let key = termfast_credential::make_key(&sid, &ct);
+    bool_to_jbool(store.save(&key, &val).is_ok())
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeLoadCredential(
+    mut env: JNIEnv,
+    _class: JClass,
+    server_id: JString,
+    cred_type: JString,
+) -> jstring {
+    let sid = jstring_to_string(&mut env, &server_id);
+    let ct = jstring_to_string(&mut env, &cred_type);
+    let store = crate::credential::android_credential_store();
+    let key = termfast_credential::make_key(&sid, &ct);
+    match store.load(&key) {
+        Ok(val) => string_to_jstring(&mut env, &val).into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeDeleteCredential(
+    mut env: JNIEnv,
+    _class: JClass,
+    server_id: JString,
+    cred_type: JString,
+) -> jboolean {
+    let sid = jstring_to_string(&mut env, &server_id);
+    let ct = jstring_to_string(&mut env, &cred_type);
+    let store = crate::credential::android_credential_store();
+    let key = termfast_credential::make_key(&sid, &ct);
+    bool_to_jbool(store.delete(&key).is_ok())
+}
+
+// === Key generation ===
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeGenerateKeypair(
+    mut env: JNIEnv,
+    _class: JClass,
+    server_id: JString,
+) -> jstring {
+    let sid = jstring_to_string(&mut env, &server_id);
+    let st = state().lock().unwrap();
+    let data_dir = st.data_dir.clone();
+    let key_dir = std::path::PathBuf::from(&data_dir).join("keys").join(&sid);
+    let _ = std::fs::create_dir_all(&key_dir);
+    match termfast_core::ssh::auth::generate_keypair_at(&key_dir, &sid) {
+        Ok((key_path, public_key, passphrase)) => {
+            let private_key = std::fs::read_to_string(&key_path).unwrap_or_default();
+            let json = serde_json::json!({
+                "private_key": private_key,
+                "public_key": public_key,
+                "passphrase": passphrase,
+                "key_path": key_path.to_string_lossy(),
+            }).to_string();
+            string_to_jstring(&mut env, &json).into_raw()
+        }
+        Err(e) => {
+            tracing::error!("Key generation failed: {:?}", e);
+            string_to_jstring(&mut env, "{}").into_raw()
+        }
+    }
+}
+
+// === Triggers ===
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeListTriggers(
+    mut env: JNIEnv,
+    _class: JClass,
+    server_id: JString,
+) -> jstring {
+    let sid = jstring_to_string(&mut env, &server_id);
+    let st = state().lock().unwrap();
+    let triggers = if let Some(ref cm) = st.config_manager {
+        let cfg = cm.get_blocking();
+        cfg.find_server(&sid).map(|s| s.triggers.clone()).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let json = serde_json::to_string(&triggers).unwrap_or_default();
+    string_to_jstring(&mut env, &json).into_raw()
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeListTriggerTemplates(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let st = state().lock().unwrap();
+    let templates = if let Some(ref cm) = st.config_manager {
+        let cfg = cm.get_blocking();
+        cfg.trigger_templates.clone()
+    } else {
+        Vec::new()
+    };
+    let json = serde_json::to_string(&templates).unwrap_or_default();
+    string_to_jstring(&mut env, &json).into_raw()
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeSetServerTriggers(
+    mut env: JNIEnv,
+    _class: JClass,
+    server_id: JString,
+    json: JString,
+) -> jboolean {
+    let sid = jstring_to_string(&mut env, &server_id);
+    let json_str = jstring_to_string(&mut env, &json);
+    let triggers: Vec<TriggerInstance> = match serde_json::from_str(&json_str) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("Failed to parse triggers: {:?}", e);
+            return bool_to_jbool(false);
+        }
+    };
+    let (cm, instance) = {
+        let st = state().lock().unwrap();
+        (st.config_manager.clone(), st.servers.get(&sid).cloned())
+    };
+    if let Some(ref cm) = cm {
+        let rt = runtime();
+        let _ = rt.block_on(cm.modify(|cfg| {
+            if let Some(server) = cfg.find_server_mut(&sid) {
+                server.triggers = triggers.clone();
+            }
+        }));
+    }
+    if let Some(instance) = instance {
+        let rt = runtime();
+        let _ = rt.block_on(instance.set_triggers(triggers));
+    }
+    bool_to_jbool(true)
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeRunTrigger(
+    mut env: JNIEnv,
+    _class: JClass,
+    server_id: JString,
+    trigger_id: JString,
+) -> jstring {
+    let sid = jstring_to_string(&mut env, &server_id);
+    let tid = jstring_to_string(&mut env, &trigger_id);
+    let st = state().lock().unwrap();
+    let result = if let Some(instance) = st.servers.get(&sid).cloned() {
+        let rt = runtime();
+        // Check if SSH is connected before running trigger
+        let connected = rt.block_on(instance.ssh_client.is_connected());
+        if !connected {
+            Err(termfast_core::error::Error::Other(
+                "SSH 未连接，请先启动 VPN 或代理".to_string(),
+            ))
+        } else {
+            rt.block_on(instance.manual_fire_trigger(&tid))
+        }
+    } else {
+        Err(termfast_core::error::Error::Other(format!("server {} not found", sid)))
+    };
+    let json = match result {
+        Ok(r) => {
+            serde_json::json!({
+                "success": r.success,
+                "trigger_id": r.trigger_id,
+                "trigger_name": r.trigger_name,
+                "executed_commands": r.executed_commands,
+                "total_commands": r.total_commands,
+                "results": r.results.iter().map(|cmd| serde_json::json!({
+                    "command": cmd.command,
+                    "exit_code": cmd.exit_code,
+                    "stdout": cmd.stdout,
+                    "stderr": cmd.stderr,
+                    "success": cmd.success,
+                })).collect::<Vec<_>>(),
+                "error": null,
+            }).to_string()
+        }
+        Err(e) => serde_json::json!({"success": false, "error": e.to_string()}).to_string(),
+    };
+    string_to_jstring(&mut env, &json).into_raw()
+}

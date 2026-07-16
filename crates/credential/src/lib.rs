@@ -5,12 +5,14 @@
 //! Falls back to in-memory storage when keychain is unavailable (§17.3).
 
 pub mod memory;
+pub mod file;
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod keychain;
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub use keychain::KeychainCredentialStore;
+pub use file::FileCredentialStore;
 pub use memory::InMemoryCredentialStore;
 
 /// Credential type prefix in key naming

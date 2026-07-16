@@ -380,32 +380,36 @@ export function ServerList({
         {/* Collapse toggle + action buttons */}
         <div
           className={`p-3 ${showFullContent ? "flex items-center gap-2" : "flex flex-col items-center gap-2"}`}
-          onMouseEnter={collapsed ? blockHoverExpand : undefined}
-          onMouseLeave={collapsed ? handleExpandButtonMouseLeave : undefined}
         >
           {collapsed && (
-            <button
-              className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 dark:bg-[#1E1E1E] hover:bg-gray-200 dark:hover:bg-[#2C2C2E] text-gray-600 dark:text-gray-300 transition-colors"
-              onClick={() => {
-                setHoverExpanded(false);
-                onToggleCollapse?.();
-              }}
-              title={t("server.expand")}
-              aria-label={t("server.expand")}
+            <div
+              className="w-full flex justify-center -mx-3 pt-3 pb-1"
+              onMouseEnter={blockHoverExpand}
+              onMouseLeave={handleExpandButtonMouseLeave}
             >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
+              <button
+                className="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 dark:bg-[#1E1E1E] hover:bg-gray-200 dark:hover:bg-[#2C2C2E] text-gray-600 dark:text-gray-300 transition-colors"
+                onClick={() => {
+                  setHoverExpanded(false);
+                  onToggleCollapse?.();
+                }}
+                title={t("server.expand")}
+                aria-label={t("server.expand")}
               >
-                <polyline points="10 17 16 12 10 7" />
-              </svg>
-            </button>
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <polyline points="10 17 16 12 10 7" />
+                </svg>
+              </button>
+            </div>
           )}
           {showFullContent ? (
             <button

@@ -150,6 +150,11 @@ impl SshClientHandle {
         self.config.lock().await.hostkey_mismatch_callback = Some(cb);
     }
 
+    /// Set the socket protector (Android VpnService.protect hook)
+    pub async fn set_socket_protector(&self, protector: Option<Arc<dyn SocketProtector>>) {
+        self.config.lock().await.socket_protector = protector;
+    }
+
     /// Connect to the SSH server with the given auth method
     pub async fn connect(&self, auth: &super::auth::AuthMethod) -> Result<()> {
         self.set_state(ConnectionState::Connecting).await;
