@@ -23,7 +23,7 @@ pub fn init_android_logging() {
             .with_max_level(log::LevelFilter::Debug),
     );
     std::panic::set_hook(Box::new(|info| {
-        tracing::error!("Rust panic: {}", info);
+        log::error!("Rust panic: {}", info);
     }));
 }
 

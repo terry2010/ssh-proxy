@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">TermFast</string>
+    <string name="tile_description">快速启停 SSH VPN</string>
+</resources>

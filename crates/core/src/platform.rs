@@ -63,3 +63,21 @@ impl SystemProxyAdapter for NoopSystemProxyAdapter {
 }
 
 // === SECTION 1 END ===
+
+/// Emit an event to the platform layer (for notifications, UI updates, etc.).
+/// Uses the callback set by `set_event_callback` if available; otherwise no-op.
+pub fn emit_event(event_json: &str) {
+    if let Some(cb) = EVENT_CALLBACK.get() {
+        cb(event_json);
+    }
+}
+
+/// Type alias for the event callback function
+type EventCallback = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+
+static EVENT_CALLBACK: std::sync::OnceLock<EventCallback> = std::sync::OnceLock::new();
+
+/// Set the platform event callback (called by android-ffi at init time)
+pub fn set_event_callback(cb: EventCallback) {
+    let _ = EVENT_CALLBACK.set(cb);
+}

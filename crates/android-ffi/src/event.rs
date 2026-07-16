@@ -28,10 +28,31 @@ pub enum RustEvent {
         server_id: String,
         vpn_running: bool,
     },
+    #[serde(rename = "ip:changed")]
+    IpChanged {
+        server_id: String,
+        server_name: String,
+        old_ip: Option<String>,
+        new_ip: String,
+    },
 }
 
 impl RustEvent {
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_default()
+    }
+
+    /// Send a log event to Kotlin (if callback is set).
+    /// Safe to call from any thread.
+    #[cfg(target_os = "android")]
+    pub fn log(level: &str, tag: &str, message: &str) {
+        let entry = serde_json::json!({
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "level": level,
+            "tag": tag,
+            "message": message,
+        });
+        let json = RustEvent::LogEntry { entry }.to_json();
+        crate::jni::dispatch_event_to_kotlin(&json);
     }
 }
