@@ -135,4 +135,14 @@ object RustRepository {
         RustBridge.nativeLoadCredential(serverId, type)
     fun deleteCredential(serverId: String, type: String): Boolean =
         RustBridge.nativeDeleteCredential(serverId, type)
+
+    // --- SSH Terminal (PTY) ---
+    fun openTerminal(serverId: String, sessionId: String, cols: Int, rows: Int): Boolean =
+        RustBridge.nativeOpenTerminal(serverId, sessionId, cols, rows)
+    fun writeTerminal(sessionId: String, data: String): Boolean =
+        RustBridge.nativeWriteTerminal(sessionId, data)
+    fun closeTerminal(sessionId: String): Boolean =
+        RustBridge.nativeCloseTerminal(sessionId)
+    fun resizeTerminal(sessionId: String, cols: Int, rows: Int): Boolean =
+        RustBridge.nativeResizeTerminal(sessionId, cols, rows)
 }
