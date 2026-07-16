@@ -42,4 +42,24 @@ sealed class RustEvent {
         val old_ip: String? = null,
         val new_ip: String,
     ) : RustEvent()
+
+    @Serializable
+    @SerialName("TerminalData")
+    data class TerminalData(
+        val session_id: String,
+        val data: String,
+    ) : RustEvent()
+
+    @Serializable
+    @SerialName("TerminalClosed")
+    data class TerminalClosed(
+        val session_id: String,
+    ) : RustEvent()
+
+    @Serializable
+    @SerialName("TerminalError")
+    data class TerminalError(
+        val session_id: String,
+        val error: String,
+    ) : RustEvent()
 }

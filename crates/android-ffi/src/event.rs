@@ -35,6 +35,20 @@ pub enum RustEvent {
         old_ip: Option<String>,
         new_ip: String,
     },
+    #[serde(rename = "TerminalData")]
+    TerminalData {
+        session_id: String,
+        data: String,
+    },
+    #[serde(rename = "TerminalClosed")]
+    TerminalClosed {
+        session_id: String,
+    },
+    #[serde(rename = "TerminalError")]
+    TerminalError {
+        session_id: String,
+        error: String,
+    },
 }
 
 impl RustEvent {

@@ -4,20 +4,29 @@ import android.app.Activity
 import android.net.VpnService
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -34,6 +43,7 @@ import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ServerListScreen(navController: NavController) {
     val repo = remember { RustRepository }
@@ -94,7 +104,6 @@ fun ServerListScreen(navController: NavController) {
 
     LaunchedEffect(Unit) { refresh() }
 
-    // Poll VPN state every 500ms so UI updates when startup completes
     LaunchedEffect(Unit) {
         while (true) {
             kotlinx.coroutines.delay(500)
@@ -121,10 +130,22 @@ fun ServerListScreen(navController: NavController) {
     }
 
     Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("TermFast", fontWeight = FontWeight.Bold) },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                ),
+            )
+        },
         floatingActionButton = {
-            FloatingActionButton(onClick = { navController.navigate("server_add") }) {
-                Icon(Icons.Filled.Add, contentDescription = "添加服务器")
-            }
+            ExtendedFloatingActionButton(
+                onClick = { navController.navigate("server_add") },
+                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                text = { Text("添加服务器") },
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
         }
     ) { padding ->
         if (loading) {
@@ -132,17 +153,11 @@ fun ServerListScreen(navController: NavController) {
                 CircularProgressIndicator()
             }
         } else if (servers.isEmpty()) {
-            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("还没有服务器", style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(8.dp))
-                    Text("点击右下角 + 添加", style = MaterialTheme.typography.bodyMedium)
-                }
-            }
+            EmptyServerState(modifier = Modifier.padding(padding))
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(16.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(servers, key = { it.id }) { server ->
@@ -177,10 +192,11 @@ fun ServerListScreen(navController: NavController) {
                                         conn.readTimeout = 5000
                                         conn.instanceFollowRedirects = false
                                         conn.requestMethod = "GET"
+                                        val start = System.currentTimeMillis()
                                         val code = conn.responseCode
-                                        val latency = System.currentTimeMillis()
+                                        val latency = System.currentTimeMillis() - start
                                         testResult = if (code in 200..399) {
-                                            "✓ $code (${System.currentTimeMillis() - latency}ms)"
+                                            "✓ $code · ${latency}ms"
                                         } else {
                                             "✗ HTTP $code"
                                         }
@@ -193,6 +209,7 @@ fun ServerListScreen(navController: NavController) {
                             }
                         },
                         onClick = { navController.navigate("server_detail/${server.id}") },
+                        onTerminal = { navController.navigate("terminal/${server.id}") },
                         onDelete = {
                             scope.launch {
                                 withContext(Dispatchers.IO) {
@@ -208,6 +225,39 @@ fun ServerListScreen(navController: NavController) {
     }
 }
 
+// === SECTION 1 END ===
+
+@Composable
+private fun EmptyServerState(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Computer,
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.outline,
+            )
+            Text(
+                "还没有服务器",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "点击右下角按钮添加你的第一台服务器",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ServerCard(
     server: ServerConfig,
@@ -219,52 +269,221 @@ private fun ServerCard(
     onVpnToggle: () -> Unit,
     onTest: () -> Unit,
     onClick: () -> Unit,
+    onTerminal: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Card(
+    val isConnected = status?.status == "connected"
+    val cardColors = CardDefaults.elevatedCardColors(
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+    )
+    ElevatedCard(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = cardColors,
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(server.name.ifBlank { server.ssh.host }, style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.weight(1f))
-                IconButton(onClick = onTest, enabled = !testing) {
-                    if (testing) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    } else {
-                        Icon(Icons.Filled.Speed, contentDescription = "测试")
+            // Header row: icon + name + status dot
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                // Server icon with status-colored background
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (isConnected)
+                                MaterialTheme.colorScheme.primaryContainer
+                            else
+                                MaterialTheme.colorScheme.surfaceVariant
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Filled.Computer,
+                        contentDescription = null,
+                        modifier = Modifier.size(22.dp),
+                        tint = if (isConnected)
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        server.name.ifBlank { server.ssh.host },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        "${server.ssh.host}:${server.ssh.port}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                // Status indicator dot
+                StatusDot(connected = isConnected, running = vpnRunning)
+            }
+
+            // Exit IP / test result
+            if (status?.exit_ip != null || testResult != null) {
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (status?.exit_ip != null) {
+                        Text(
+                            "IP: ${status.exit_ip}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (status?.exit_ip != null && testResult != null) {
+                        Spacer(Modifier.weight(1f))
+                    }
+                    if (testResult != null) {
+                        if (status?.exit_ip != null) Spacer(Modifier.weight(1f))
+                        Text(
+                            testResult,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (testResult.startsWith("✓"))
+                                MaterialTheme.colorScheme.primary
+                            else
+                                MaterialTheme.colorScheme.error,
+                        )
                     }
                 }
             }
-            Spacer(Modifier.height(4.dp))
-            Text("${server.ssh.host}:${server.ssh.port}", style = MaterialTheme.typography.bodySmall)
-            if (status?.exit_ip != null) {
-                Text("出口 IP: ${status.exit_ip}", style = MaterialTheme.typography.bodySmall)
-            }
-            if (testResult != null) {
-                Text(testResult, style = MaterialTheme.typography.bodySmall)
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+
+            Spacer(Modifier.height(12.dp))
+
+            // Action buttons row
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // VPN toggle button — primary action
                 Button(
                     onClick = onVpnToggle,
                     modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-                    enabled = !vpnStarting
+                    enabled = !vpnStarting,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = if (vpnRunning || vpnStarting) {
+                        ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                    } else {
+                        ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                        )
+                    },
                 ) {
                     if (vpnStarting) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                        )
                     } else {
-                        Icon(if (vpnRunning) Icons.Filled.Stop else Icons.Filled.PlayArrow, contentDescription = null)
+                        Icon(
+                            if (vpnRunning) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
                     }
-                    Spacer(Modifier.width(4.dp))
-                    Text(if (vpnStarting) "连接中" else if (vpnRunning) "停止 VPN" else "启动 VPN")
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        if (vpnStarting) "连接中" else if (vpnRunning) "停止" else "启动 VPN",
+                        fontWeight = FontWeight.Medium,
+                    )
                 }
-                IconButton(onClick = onDelete) {
-                    Icon(Icons.Filled.Delete, contentDescription = "删除")
-                }
+                // Terminal button
+                OutlinedIconButton(
+                    icon = Icons.Filled.Terminal,
+                    contentDescription = "终端",
+                    onClick = onTerminal,
+                )
+                // Test button
+                OutlinedIconButton(
+                    icon = Icons.Filled.Speed,
+                    contentDescription = "测试",
+                    onClick = onTest,
+                    enabled = !testing,
+                    loading = testing,
+                )
+                // Delete button
+                OutlinedIconButton(
+                    icon = Icons.Filled.Delete,
+                    contentDescription = "删除",
+                    onClick = onDelete,
+                    tint = MaterialTheme.colorScheme.error,
+                )
             }
+        }
+    }
+}
+
+// === SECTION 2 END ===
+
+@Composable
+private fun StatusDot(connected: Boolean, running: Boolean) {
+    val color = when {
+        running -> MaterialTheme.colorScheme.secondary
+        connected -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.outlineVariant
+    }
+    Box(
+        modifier = Modifier
+            .size(10.dp)
+            .clip(CircleShape)
+            .background(color),
+    )
+}
+
+@Composable
+private fun OutlinedIconButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    loading: Boolean = false,
+    tint: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurfaceVariant,
+) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(12.dp),
+        contentPadding = PaddingValues(0.dp),
+        modifier = Modifier.size(44.dp),
+    ) {
+        if (loading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+            )
+        } else {
+            Icon(
+                icon,
+                contentDescription = contentDescription,
+                modifier = Modifier.size(20.dp),
+                tint = if (enabled) tint else MaterialTheme.colorScheme.outlineVariant,
+            )
         }
     }
 }

@@ -5,16 +5,24 @@ import android.content.Context
 import android.net.VpnService
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.termfast.app.data.RustRepository
@@ -89,7 +97,6 @@ fun ServerDetailScreen(navController: NavController, serverId: String) {
         }
     }
 
-    // Refresh status when screen resumes (e.g. navigating back from list)
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, serverId) {
         val observer = LifecycleEventObserver { _, event ->
@@ -113,16 +120,21 @@ fun ServerDetailScreen(navController: NavController, serverId: String) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    val serverName = serverConfig?.name?.ifBlank { serverConfig?.ssh?.host } ?: "服务器"
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("服务器详情") },
+                title = { Text(serverName, fontWeight = FontWeight.SemiBold, maxLines = 1) },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
                 actions = {
+                    IconButton(onClick = { navController.navigate("terminal/$serverId") }) {
+                        Icon(Icons.Filled.Terminal, contentDescription = "终端")
+                    }
                     IconButton(onClick = { navController.navigate("server_edit/$serverId") }) {
                         Icon(Icons.Filled.Edit, contentDescription = "编辑")
                     }
@@ -131,7 +143,10 @@ fun ServerDetailScreen(navController: NavController, serverId: String) {
         }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            TabRow(selectedTabIndex = tab) {
+            TabRow(
+                selectedTabIndex = tab,
+                containerColor = MaterialTheme.colorScheme.surface,
+            ) {
                 Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("概览") })
                 Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("代理") })
                 Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("触发器") })
@@ -143,7 +158,8 @@ fun ServerDetailScreen(navController: NavController, serverId: String) {
                     exitIp = exitIp,
                     proxyRunning = proxyRunning,
                     vpnRunning = vpnRunning,
-                    onVpnToggle = { toggleVpn() }
+                    onVpnToggle = { toggleVpn() },
+                    onTerminal = { navController.navigate("terminal/$serverId") },
                 )
                 1 -> ProxyTab(
                     serverId = serverId,
@@ -184,6 +200,8 @@ fun ServerDetailScreen(navController: NavController, serverId: String) {
     }
 }
 
+// === SECTION 1 END ===
+
 @Composable
 private fun OverviewTab(
     serverId: String,
@@ -192,37 +210,103 @@ private fun OverviewTab(
     proxyRunning: Boolean,
     vpnRunning: Boolean,
     onVpnToggle: () -> Unit,
+    onTerminal: () -> Unit,
 ) {
-    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        // VPN toggle — large primary button
         Button(
             onClick = onVpnToggle,
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = if (vpnRunning) {
+                ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                )
+            } else {
+                ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                )
+            },
         ) {
-            Icon(if (vpnRunning) Icons.Filled.Stop else Icons.Filled.PlayArrow, contentDescription = null)
+            Icon(
+                if (vpnRunning) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                contentDescription = null,
+                modifier = Modifier.size(22.dp),
+            )
             Spacer(Modifier.width(8.dp))
-            Text(if (vpnRunning) "停止 VPN" else "启动 VPN")
-        }
-        ListItem(
-            headlineContent = { Text("SSH 状态") },
-            supportingContent = { Text(status) }
-        )
-        if (exitIp != null) {
-            ListItem(
-                headlineContent = { Text("出口 IP") },
-                supportingContent = { Text(exitIp) }
+            Text(
+                if (vpnRunning) "停止 VPN" else "启动 VPN",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
             )
         }
-        ListItem(
-            headlineContent = { Text("代理") },
-            supportingContent = { Text(if (proxyRunning) "运行中" else "已停止") }
-        )
-        ListItem(
-            headlineContent = { Text("VPN") },
-            supportingContent = { Text(if (vpnRunning) "运行中" else "已停止") }
+
+        // Terminal quick-access button
+        OutlinedButton(
+            onClick = onTerminal,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(14.dp),
+        ) {
+            Icon(Icons.Filled.Terminal, contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("打开 SSH 终端")
+        }
+
+        // Status info card
+        ElevatedCard(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.elevatedCardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            ),
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("状态信息", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(12.dp))
+                StatusRow(label = "SSH 连接", value = status, positive = status == "connected")
+                if (exitIp != null) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+                    StatusRow(label = "出口 IP", value = exitIp)
+                }
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+                StatusRow(label = "代理", value = if (proxyRunning) "运行中" else "已停止", positive = proxyRunning)
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+                StatusRow(label = "VPN", value = if (vpnRunning) "运行中" else "已停止", positive = vpnRunning)
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusRow(label: String, value: String, positive: Boolean? = null) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = when (positive) {
+                true -> MaterialTheme.colorScheme.primary
+                false -> MaterialTheme.colorScheme.onSurfaceVariant
+                null -> MaterialTheme.colorScheme.onSurface
+            },
         )
     }
 }
+
+// === SECTION 2 END ===
 
 @Composable
 private fun ProxyTab(
@@ -240,83 +324,138 @@ private fun ProxyTab(
     var testResult by remember { mutableStateOf<String?>(null) }
     var testing by remember { mutableStateOf(false) }
 
-    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        OutlinedTextField(
-            value = socks5Port, onValueChange = { socks5Port = it },
-            label = { Text("SOCKS5 端口") },
-            modifier = Modifier.fillMaxWidth()
-        )
-        Button(
-            onClick = { onToggle(!proxyRunning) },
-            modifier = Modifier.fillMaxWidth()
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        // Proxy toggle card
+        ElevatedCard(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.elevatedCardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            ),
         ) {
-            Text(if (proxyRunning) "停止代理" else "启动代理")
-        }
-        Text(
-            "注意：此功能仅启动本机 SOCKS5 代理端口，不会启动 VPN。如需 VPN 上网，请使用「启动 VPN」按钮。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error
-        )
-        if (proxyRunning) {
-            Text("代理运行中，端口 $socks5Port", style = MaterialTheme.typography.bodyMedium)
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("SOCKS5 代理", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                OutlinedTextField(
+                    value = socks5Port,
+                    onValueChange = { socks5Port = it },
+                    label = { Text("SOCKS5 端口") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    singleLine = true,
+                )
+                Button(
+                    onClick = { onToggle(!proxyRunning) },
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = if (proxyRunning) {
+                        ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                    } else {
+                        ButtonDefaults.buttonColors()
+                    },
+                ) {
+                    Text(if (proxyRunning) "停止代理" else "启动代理", fontWeight = FontWeight.Medium)
+                }
+                if (proxyRunning) {
+                    Text(
+                        "代理运行中 · 端口 $socks5Port",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Text(
+                    "注意：此功能仅启动本机 SOCKS5 代理端口，不会启动 VPN。如需 VPN 上网，请使用「启动 VPN」按钮。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
 
-        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-        Text("测试地址", style = MaterialTheme.typography.titleSmall)
-        OutlinedTextField(
-            value = testUrl,
-            onValueChange = { testUrl = it },
-            label = { Text("URL") },
+        // Test URL card
+        ElevatedCard(
             modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = {
-                    scope.launch {
-                        testing = true
-                        testResult = null
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            try {
-                                val conn = java.net.URL(testUrl.ifBlank { "https://google.com" })
-                                    .openConnection() as java.net.HttpURLConnection
-                                conn.connectTimeout = 5000
-                                conn.readTimeout = 5000
-                                conn.instanceFollowRedirects = false
-                                conn.requestMethod = "GET"
-                                val code = conn.responseCode
-                                val start = System.currentTimeMillis()
-                                testResult = if (code in 200..399) {
-                                    "✓ $code (${System.currentTimeMillis() - start}ms)"
-                                } else {
-                                    "✗ HTTP $code"
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.elevatedCardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            ),
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("代理测试", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                OutlinedTextField(
+                    value = testUrl,
+                    onValueChange = { testUrl = it },
+                    label = { Text("测试 URL") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    singleLine = true,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                testing = true
+                                testResult = null
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    try {
+                                        val conn = java.net.URL(testUrl.ifBlank { "https://google.com" })
+                                            .openConnection() as java.net.HttpURLConnection
+                                        conn.connectTimeout = 5000
+                                        conn.readTimeout = 5000
+                                        conn.instanceFollowRedirects = false
+                                        conn.requestMethod = "GET"
+                                        val start = System.currentTimeMillis()
+                                        val code = conn.responseCode
+                                        val latency = System.currentTimeMillis() - start
+                                        testResult = if (code in 200..399) {
+                                            "✓ $code · ${latency}ms"
+                                        } else {
+                                            "✗ HTTP $code"
+                                        }
+                                        conn.disconnect()
+                                    } catch (e: Exception) {
+                                        testResult = "✗ ${e.message ?: "失败"}"
+                                    }
                                 }
-                                conn.disconnect()
-                            } catch (e: Exception) {
-                                testResult = "✗ ${e.message ?: "失败"}"
+                                testing = false
                             }
+                        },
+                        enabled = !testing,
+                        modifier = Modifier.weight(1f).height(44.dp),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        if (testing) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text("测试")
                         }
-                        testing = false
                     }
-                },
-                enabled = !testing,
-                modifier = Modifier.weight(1f),
-            ) {
-                if (testing) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                } else {
-                    Text("测试")
+                    OutlinedButton(
+                        onClick = { onSaveTestUrl(testUrl.ifBlank { "https://google.com" }) },
+                        modifier = Modifier.weight(1f).height(44.dp),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text("保存")
+                    }
+                }
+                if (testResult != null) {
+                    Text(
+                        testResult!!,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (testResult!!.startsWith("✓"))
+                            MaterialTheme.colorScheme.primary
+                        else
+                            MaterialTheme.colorScheme.error,
+                    )
                 }
             }
-            OutlinedButton(
-                onClick = { onSaveTestUrl(testUrl.ifBlank { "https://google.com" }) },
-                modifier = Modifier.weight(1f),
-            ) {
-                Text("保存")
-            }
-        }
-        if (testResult != null) {
-            Text(testResult!!, style = MaterialTheme.typography.bodySmall)
         }
     }
 }

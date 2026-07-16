@@ -86,6 +86,10 @@ fun TermFastApp() {
             composable("per_app_proxy") {
                 com.termfast.app.ui.screen.PerAppProxyScreen(navController)
             }
+            composable("terminal/{serverId}") { backStack ->
+                val id = backStack.arguments?.getString("serverId") ?: ""
+                com.termfast.app.ui.screen.TerminalScreen(navController, id)
+            }
         }
     }
 }

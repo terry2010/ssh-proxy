@@ -17,16 +17,16 @@ use termfast_core::server::ServerInstance;
 use termfast_credential::CredentialStore;
 
 /// Global state holder for the FFI layer.
-struct FfiState {
-    data_dir: String,
-    config_manager: Option<ConfigManager>,
-    servers: std::collections::HashMap<String, Arc<ServerInstance>>,
-    event_callback: Option<GlobalRef>,
+pub struct FfiState {
+    pub data_dir: String,
+    pub config_manager: Option<ConfigManager>,
+    pub servers: std::collections::HashMap<String, Arc<ServerInstance>>,
+    pub event_callback: Option<GlobalRef>,
 }
 
 static STATE: OnceLock<Mutex<FfiState>> = OnceLock::new();
 
-fn state() -> &'static Mutex<FfiState> {
+pub fn state() -> &'static Mutex<FfiState> {
     STATE.get_or_init(|| {
         Mutex::new(FfiState {
             data_dir: String::new(),
@@ -792,4 +792,90 @@ pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeRunTrigger(
         Err(e) => serde_json::json!({"success": false, "error": e.to_string()}).to_string(),
     };
     string_to_jstring(&mut env, &json).into_raw()
+}
+
+// === SSH Terminal (PTY) ===
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeOpenTerminal(
+    mut env: JNIEnv,
+    _class: JClass,
+    server_id: JString,
+    session_id: JString,
+    cols: jint,
+    rows: jint,
+) -> jboolean {
+    let sid = jstring_to_string(&mut env, &server_id);
+    let session = jstring_to_string(&mut env, &session_id);
+    let cols = if cols > 0 { cols as u32 } else { 80 };
+    let rows = if rows > 0 { rows as u32 } else { 24 };
+
+    let rt = runtime();
+    let result = rt.block_on(crate::pty_api::open_session(&sid, &session, cols, rows));
+    match result {
+        Ok(()) => {
+            log_to_kotlin("info", &format!("Terminal opened for server {}", sid));
+            bool_to_jbool(true)
+        }
+        Err(e) => {
+            log_to_kotlin("error", &format!("Failed to open terminal: {}", e));
+            // Send error event to Kotlin
+            let json = serde_json::json!({
+                "type": "TerminalError",
+                "session_id": session,
+                "error": e,
+            });
+            dispatch_event_to_kotlin(&json.to_string());
+            bool_to_jbool(false)
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeWriteTerminal(
+    mut env: JNIEnv,
+    _class: JClass,
+    session_id: JString,
+    data: JString,
+) -> jboolean {
+    let session = jstring_to_string(&mut env, &session_id);
+    let input = jstring_to_string(&mut env, &data);
+    match crate::pty_api::write_session(&session, input.as_bytes()) {
+        Ok(()) => bool_to_jbool(true),
+        Err(e) => {
+            log_to_kotlin("error", &format!("Terminal write error: {}", e));
+            bool_to_jbool(false)
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeCloseTerminal(
+    mut env: JNIEnv,
+    _class: JClass,
+    session_id: JString,
+) -> jboolean {
+    let session = jstring_to_string(&mut env, &session_id);
+    crate::pty_api::close_session(&session);
+    bool_to_jbool(true)
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeResizeTerminal(
+    mut env: JNIEnv,
+    _class: JClass,
+    session_id: JString,
+    cols: jint,
+    rows: jint,
+) -> jboolean {
+    let session = jstring_to_string(&mut env, &session_id);
+    let cols = if cols > 0 { cols as u32 } else { 80 };
+    let rows = if rows > 0 { rows as u32 } else { 24 };
+    let rt = runtime();
+    let _ = rt.block_on(crate::pty_api::resize_session(&session, cols, rows));
+    bool_to_jbool(true)
 }

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -17,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -167,18 +169,36 @@ private fun TriggerCard(
     onDelete: () -> Unit,
     running: Boolean,
 ) {
-    Card(
+    ElevatedCard(
         onClick = onEdit,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(trigger.name, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                Text(
+                    trigger.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
                 Switch(checked = trigger.enabled, onCheckedChange = onToggle)
             }
-            Text("类型: ${trigger.trigger_type}", style = MaterialTheme.typography.bodySmall)
+            Text(
+                "类型: ${trigger.trigger_type}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             if (trigger.commands.isNotEmpty()) {
-                Text(trigger.commands.first(), style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                Text(
+                    trigger.commands.first(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -192,7 +212,7 @@ private fun TriggerCard(
                     Icon(Icons.Filled.PlayArrow, contentDescription = "执行")
                 }
                 IconButton(onClick = onDelete) {
-                    Icon(Icons.Filled.Delete, contentDescription = "删除")
+                    Icon(Icons.Filled.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)
                 }
             }
         }
@@ -206,15 +226,27 @@ private fun TriggerResultView(r: TriggerResult) {
     } else {
         "✗ 失败: ${r.error ?: "有命令执行失败"}"
     }
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Text(header, style = MaterialTheme.typography.titleSmall)
-            Spacer(Modifier.height(4.dp))
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Text(
+                header,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = if (r.success) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+            )
+            Spacer(Modifier.height(6.dp))
             r.results.forEach { cmd ->
                 Text(
                     "$ ${cmd.command}",
                     style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
                     "退出码: ${cmd.exit_code}",
@@ -225,7 +257,8 @@ private fun TriggerResultView(r: TriggerResult) {
                     Text(
                         "stdout:\n${cmd.stdout.trim()}",
                         style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 if (cmd.stderr.isNotBlank()) {
@@ -233,7 +266,7 @@ private fun TriggerResultView(r: TriggerResult) {
                         "stderr:\n${cmd.stderr.trim()}",
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.error
+                        color = MaterialTheme.colorScheme.error,
                     )
                 }
                 Spacer(Modifier.height(8.dp))
@@ -274,7 +307,7 @@ fun TriggerEditScreen(navController: NavController, serverId: String, triggerId:
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (triggerId == null) "添加触发器" else "编辑触发器") },
+                title = { Text(if (triggerId == null) "添加触发器" else "编辑触发器", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
@@ -287,58 +320,108 @@ fun TriggerEditScreen(navController: NavController, serverId: String, triggerId:
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            OutlinedTextField(
-                value = name, onValueChange = { name = it },
-                label = { Text("名称") }, modifier = Modifier.fillMaxWidth()
-            )
-            var expanded by remember { mutableStateOf(false) }
-            ExposedDropdownMenuBox(
-                expanded = expanded,
-                onExpandedChange = { expanded = it }
+            ElevatedCard(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.elevatedCardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                ),
             ) {
-                OutlinedTextField(
-                    value = type,
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("类型") },
-                    modifier = Modifier.menuAnchor().fillMaxWidth()
-                )
-                ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                    listOf("ManualFire", "OnConnect", "OnReconnect", "OnIpChange").forEach {
-                        DropdownMenuItem(
-                            text = { Text(it) },
-                            onClick = { type = it; expanded = false }
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("基本配置", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    OutlinedTextField(
+                        value = name, onValueChange = { name = it },
+                        label = { Text("名称") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true,
+                    )
+                    var expanded by remember { mutableStateOf(false) }
+                    ExposedDropdownMenuBox(
+                        expanded = expanded,
+                        onExpandedChange = { expanded = it }
+                    ) {
+                        OutlinedTextField(
+                            value = type,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("类型") },
+                            modifier = Modifier.menuAnchor().fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            singleLine = true,
                         )
+                        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                            listOf("ManualFire", "OnConnect", "OnReconnect", "OnIpChange").forEach {
+                                DropdownMenuItem(
+                                    text = { Text(it) },
+                                    onClick = { type = it; expanded = false }
+                                )
+                            }
+                        }
+                    }
+                    OutlinedTextField(
+                        value = timeout, onValueChange = { timeout = it },
+                        label = { Text("超时 (秒)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = commands,
+                        onValueChange = { commands = it },
+                        label = { Text("命令 (每行一个)") },
+                        modifier = Modifier.fillMaxWidth().height(160.dp),
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text("启用", style = MaterialTheme.typography.bodyLarge)
+                        Switch(checked = enabled, onCheckedChange = { enabled = it })
                     }
                 }
             }
-            OutlinedTextField(
-                value = timeout, onValueChange = { timeout = it },
-                label = { Text("超时 (秒)") }, modifier = Modifier.fillMaxWidth()
-            )
-            OutlinedTextField(
-                value = commands,
-                onValueChange = { commands = it },
-                label = { Text("命令 (每行一个)") },
-                modifier = Modifier.fillMaxWidth().height(160.dp)
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = enabled, onCheckedChange = { enabled = it })
-                Text("启用")
+
+            ElevatedCard(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.elevatedCardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                ),
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("通知", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text("成功时发通知", style = MaterialTheme.typography.bodyLarge)
+                        Switch(checked = notifyOnSuccess, onCheckedChange = { notifyOnSuccess = it })
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text("失败时发通知", style = MaterialTheme.typography.bodyLarge)
+                        Switch(checked = notifyOnFailure, onCheckedChange = { notifyOnFailure = it })
+                    }
+                }
             }
-            Text("通知", style = MaterialTheme.typography.titleSmall)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = notifyOnSuccess, onCheckedChange = { notifyOnSuccess = it })
-                Text("成功时发通知")
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = notifyOnFailure, onCheckedChange = { notifyOnFailure = it })
-                Text("失败时发通知")
-            }
+
             Button(
                 onClick = {
                     val list = repo.listTriggers(serverId).toMutableList()
@@ -361,9 +444,10 @@ fun TriggerEditScreen(navController: NavController, serverId: String, triggerId:
                     repo.setServerTriggers(serverId, list)
                     navController.popBackStack()
                 },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(14.dp),
             ) {
-                Text("保存")
+                Text("保存", fontWeight = FontWeight.SemiBold)
             }
         }
     }

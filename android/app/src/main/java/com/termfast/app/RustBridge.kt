@@ -63,4 +63,10 @@ object RustBridge {
     external fun nativeSaveCredential(serverId: String, type: String, value: String): Boolean
     external fun nativeLoadCredential(serverId: String, type: String): String?
     external fun nativeDeleteCredential(serverId: String, type: String): Boolean
+
+    // --- SSH Terminal (PTY) ---
+    external fun nativeOpenTerminal(serverId: String, sessionId: String, cols: Int, rows: Int): Boolean
+    external fun nativeWriteTerminal(sessionId: String, data: String): Boolean
+    external fun nativeCloseTerminal(sessionId: String): Boolean
+    external fun nativeResizeTerminal(sessionId: String, cols: Int, rows: Int): Boolean
 }

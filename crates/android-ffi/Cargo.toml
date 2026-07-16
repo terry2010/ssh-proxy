@@ -23,6 +23,7 @@ chrono = { workspace = true }
 base64 = { workspace = true }
 hex = { workspace = true }
 async-trait = { workspace = true }
+russh = { workspace = true }
 
 jni = "0.21"
 socket2 = "0.5"

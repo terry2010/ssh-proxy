@@ -153,6 +153,15 @@ class MainActivity : ComponentActivity() {
             is RustEvent.LogEntry -> {
                 // Log entries are handled by LogScreen
             }
+            is RustEvent.TerminalData -> {
+                // Terminal data is handled by TerminalScreen
+            }
+            is RustEvent.TerminalClosed -> {
+                // Terminal closed is handled by TerminalScreen
+            }
+            is RustEvent.TerminalError -> {
+                // Terminal error is handled by TerminalScreen
+            }
         }
     }
 
