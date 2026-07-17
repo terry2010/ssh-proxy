@@ -91,9 +91,12 @@ class SshVpnService : VpnService() {
         serverId = intent.getStringExtra(EXTRA_SERVER_ID) ?: ""
         val mtu = intent.getIntExtra(EXTRA_MTU, 1400)
         val socks5Port = intent.getIntExtra(EXTRA_SOCKS5_PORT, 1080)
-        val ipv6 = intent.getBooleanExtra("ipv6", true)
+        val ipv6 = false  // Force disable IPv6 — SSH SOCKS5 proxy doesn't reliably
+                          // support IPv6, causing connections to return 0 bytes.
         val routeUla = intent.getBooleanExtra("route_ula", false)
-        val dns = intent.getStringExtra("dns") ?: "over-tcp"
+        val dns = "none"  // Virtual DNS: tun2proxy returns fake IPs, resolves domains
+                          // via SOCKS5 hostname resolution (SSH direct-tcpip) on remote.
+                          // over-tcp doesn't work: remote can't reach 8.8.8.8:53 reliably.
         val killSwitch = intent.getBooleanExtra("kill_switch", false)
         val perAppMode = intent.getStringExtra("per_app_mode") ?: "blacklist"
         val perAppPackages = intent.getStringArrayExtra("per_app_packages") ?: emptyArray()

@@ -317,6 +317,8 @@ private fun ProxyTab(
     onSaveTestUrl: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val repo = remember { com.termfast.app.data.RustRepository }
     var socks5Port by remember { mutableStateOf("1080") }
     var testUrl by remember(serverConfig?.id) {
         mutableStateOf(serverConfig?.test_url ?: "https://google.com")
@@ -403,27 +405,30 @@ private fun ProxyTab(
                             scope.launch {
                                 testing = true
                                 testResult = null
-                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                    try {
-                                        val conn = java.net.URL(testUrl.ifBlank { "https://google.com" })
-                                            .openConnection() as java.net.HttpURLConnection
-                                        conn.connectTimeout = 5000
-                                        conn.readTimeout = 5000
-                                        conn.instanceFollowRedirects = false
-                                        conn.requestMethod = "GET"
-                                        val start = System.currentTimeMillis()
-                                        val code = conn.responseCode
-                                        val latency = System.currentTimeMillis() - start
-                                        testResult = if (code in 200..399) {
-                                            "✓ $code · ${latency}ms"
-                                        } else {
-                                            "✗ HTTP $code"
+                                val result = kotlinx.coroutines.withTimeoutOrNull(12000L) {
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                        try {
+                                            val url = testUrl.ifBlank { "https://google.com" }
+                                            val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                                            conn.connectTimeout = 8000
+                                            conn.readTimeout = 8000
+                                            conn.instanceFollowRedirects = false
+                                            conn.requestMethod = "GET"
+                                            val start = System.currentTimeMillis()
+                                            val code = conn.responseCode
+                                            val latency = System.currentTimeMillis() - start
+                                            conn.disconnect()
+                                            if (code in 200..399) {
+                                                "✓ $code · ${latency}ms"
+                                            } else {
+                                                "✗ HTTP $code"
+                                            }
+                                        } catch (e: Exception) {
+                                            "✗ ${e.message ?: "失败"}"
                                         }
-                                        conn.disconnect()
-                                    } catch (e: Exception) {
-                                        testResult = "✗ ${e.message ?: "失败"}"
                                     }
                                 }
+                                testResult = result ?: "✗ 超时"
                                 testing = false
                             }
                         },
