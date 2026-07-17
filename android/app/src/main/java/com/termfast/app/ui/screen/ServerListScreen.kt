@@ -189,11 +189,18 @@ fun ServerListScreen(navController: NavController) {
                         testing = testing,
                         onVpnToggle = {
                             if (cardVpnRunning || cardVpnStarting) {
+                                // This card's VPN is running — stop it
                                 SshVpnService.stop(context)
                                 vpnRunning = false
                                 vpnStarting = false
                                 vpnServerId = ""
                             } else {
+                                // Another VPN might be running on a different card.
+                                // Don't call stop() here — startVpnInternal will
+                                // tear down the previous server's state before
+                                // connecting the new one. Calling stop() first
+                                // creates a race condition between the stop thread
+                                // and the start thread.
                                 vpnStarting = true
                                 vpnServerId = server.id
                                 startVpn(server)

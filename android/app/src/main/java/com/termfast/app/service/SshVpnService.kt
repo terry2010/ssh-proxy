@@ -36,6 +36,9 @@ class SshVpnService : VpnService() {
         var activeServerId: String = ""
             private set
 
+        @Volatile
+        private var previousActiveServerId: String = ""
+
         fun isRunning(context: Context): Boolean = state == VpnState.RUNNING
         fun isStarting(context: Context): Boolean = state == VpnState.STARTING
         fun isActive(context: Context): Boolean = state != VpnState.STOPPED
@@ -78,6 +81,10 @@ class SshVpnService : VpnService() {
         if (intent.getStringExtra("action") == "stop") {
             Log.i(TAG, "Stop action received")
             state = VpnState.STOPPED
+            // Save the current server ID before clearing, so that if a start
+            // action follows immediately, startVpnInternal can use
+            // previousActiveServerId to tear down the old connection.
+            previousActiveServerId = activeServerId
             activeServerId = ""
             Thread {
                 try {
@@ -96,7 +103,11 @@ class SshVpnService : VpnService() {
         }
 
         serverId = intent.getStringExtra(EXTRA_SERVER_ID) ?: ""
+        // Save the currently active server (if any) before switching, so
+        // startVpnInternal can tear down its SSH/proxy/VPN state.
+        previousActiveServerId = activeServerId
         activeServerId = serverId
+        Log.i(TAG, "Starting VPN for server=$serverId, previous=$previousActiveServerId")
         val mtu = intent.getIntExtra(EXTRA_MTU, 1400)
         val socks5Port = intent.getIntExtra(EXTRA_SOCKS5_PORT, 1080)
         val ipv6 = intent.getBooleanExtra("ipv6", true)
@@ -159,8 +170,28 @@ class SshVpnService : VpnService() {
             return
         }
 
-        // Disconnect any existing SSH connection (which was made without protect),
-        // then reconnect so the new SSH socket is protected by VpnService.protect()
+        // Tear down any previous VPN/proxy/SSH state before connecting.
+        // This handles the case where the user switches directly from one
+        // server to another without explicitly stopping the first VPN.
+        // We do a full teardown here (not relying on the async stop action)
+        // to ensure the old state is fully cleared before connecting.
+        val previousServerId = previousActiveServerId
+        if (previousServerId.isNotEmpty() && previousServerId != serverId) {
+            // Stop tun2proxy first
+            RustBridge.nativeStopVpn(previousServerId)
+            // Close the old TUN fd — this removes Android's VPN routing so
+            // DNS resolution in nativeConnectServer goes through the underlying
+            // network instead of the dead TUN interface.
+            closeTunFd()
+            // Stop proxy and disconnect SSH for the previous server
+            RustBridge.nativeStopProxy(previousServerId)
+            RustBridge.nativeDisconnectServer(previousServerId)
+        } else {
+            // Same server or no previous — just stop tun2proxy and close TUN
+            RustBridge.nativeStopVpn(serverId)
+            closeTunFd()
+        }
+        // Disconnect the new server's SSH (was made without protect), then reconnect
         RustBridge.nativeDisconnectServer(serverId)
 
         if (!RustBridge.nativeConnectServer(serverId)) {
