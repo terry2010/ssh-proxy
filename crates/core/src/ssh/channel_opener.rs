@@ -52,10 +52,17 @@ impl SshChannelOpener {
 #[async_trait::async_trait]
 impl ChannelOpener for SshChannelOpener {
     async fn open_channel(&self, host: &str, port: u16) -> Result<Channel<client::Msg>> {
-        let guard = self.handle.lock().await;
-        let handle = guard
-            .as_ref()
-            .ok_or_else(|| Error::Ssh("SSH connection not available".into()))?;
+        // Only hold the lock long enough to clone the Arc<Handle>, then
+        // release it before the (potentially slow) channel_open_direct_tcpip
+        // call. Otherwise a single slow connect blocks all subsequent
+        // SOCKS5 CONNECT requests.
+        let handle = {
+            let guard = self.handle.lock().await;
+            guard
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| Error::Ssh("SSH connection not available".into()))?
+        };
         handle
             .channel_open_direct_tcpip(host, port as u32, "127.0.0.1", 0)
             .await

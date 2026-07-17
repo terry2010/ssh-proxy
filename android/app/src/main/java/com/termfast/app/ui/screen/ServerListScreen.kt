@@ -5,6 +5,9 @@ import android.net.VpnService
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,6 +22,9 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.*
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,6 +61,7 @@ fun ServerListScreen(navController: NavController) {
     var loading by remember { mutableStateOf(true) }
     var vpnRunning by remember { mutableStateOf(SshVpnService.isRunning(context)) }
     var vpnStarting by remember { mutableStateOf(SshVpnService.isStarting(context)) }
+    var vpnServerId by remember { mutableStateOf(SshVpnService.activeServerId) }
     var pendingVpnServer by remember { mutableStateOf<ServerConfig?>(null) }
 
     val vpnLauncher = rememberLauncherForActivityResult(
@@ -66,6 +73,7 @@ fun ServerListScreen(navController: NavController) {
                 val socks5Port = server.proxy?.socks5_port ?: 1080
                 SshVpnService.start(context, server.id, settings, socks5Port)
                 vpnRunning = true
+                vpnServerId = server.id
             }
         }
         pendingVpnServer = null
@@ -81,6 +89,7 @@ fun ServerListScreen(navController: NavController) {
             val socks5Port = server.proxy?.socks5_port ?: 1080
             SshVpnService.start(context, server.id, settings, socks5Port)
             vpnRunning = true
+            vpnServerId = server.id
         }
     }
 
@@ -91,11 +100,13 @@ fun ServerListScreen(navController: NavController) {
                 val st = list.associate { it.id to repo.getServerStatus(it.id) }
                 val vpn = SshVpnService.isRunning(context)
                 val starting = SshVpnService.isStarting(context)
+                val sid = SshVpnService.activeServerId
                 withContext(Dispatchers.Main) {
                     servers = list
                     statuses = st
                     vpnRunning = vpn
                     vpnStarting = starting
+                    vpnServerId = sid
                     loading = false
                 }
             }
@@ -109,9 +120,11 @@ fun ServerListScreen(navController: NavController) {
             kotlinx.coroutines.delay(500)
             val running = SshVpnService.isRunning(context)
             val starting = SshVpnService.isStarting(context)
-            if (running != vpnRunning || starting != vpnStarting) {
+            val sid = SshVpnService.activeServerId
+            if (running != vpnRunning || starting != vpnStarting || sid != vpnServerId) {
                 vpnRunning = running
                 vpnStarting = starting
+                vpnServerId = sid
             }
         }
     }
@@ -122,6 +135,7 @@ fun ServerListScreen(navController: NavController) {
             if (event == Lifecycle.Event.ON_RESUME) {
                 vpnRunning = SshVpnService.isRunning(context)
                 vpnStarting = SshVpnService.isStarting(context)
+                vpnServerId = SshVpnService.activeServerId
                 refresh()
             }
         }
@@ -163,20 +177,25 @@ fun ServerListScreen(navController: NavController) {
                 items(servers, key = { it.id }) { server ->
                     var testResult by remember { mutableStateOf<String?>(null) }
                     var testing by remember { mutableStateOf(false) }
+                    val isThisVpn = vpnServerId == server.id
+                    val cardVpnRunning = vpnRunning && isThisVpn
+                    val cardVpnStarting = vpnStarting && isThisVpn
                     ServerCard(
                         server = server,
                         status = statuses[server.id],
-                        vpnRunning = vpnRunning,
-                        vpnStarting = vpnStarting,
+                        vpnRunning = cardVpnRunning,
+                        vpnStarting = cardVpnStarting,
                         testResult = testResult,
                         testing = testing,
                         onVpnToggle = {
-                            if (vpnRunning || vpnStarting) {
+                            if (cardVpnRunning || cardVpnStarting) {
                                 SshVpnService.stop(context)
                                 vpnRunning = false
                                 vpnStarting = false
+                                vpnServerId = ""
                             } else {
                                 vpnStarting = true
+                                vpnServerId = server.id
                                 startVpn(server)
                             }
                         },
@@ -186,10 +205,14 @@ fun ServerListScreen(navController: NavController) {
                                 testResult = null
                                 withContext(Dispatchers.IO) {
                                     try {
-                                        val testUrl = server.test_url.ifBlank { "https://google.com" }
+                                        var testUrl = server.test_url.ifBlank { "https://google.com" }
+                                        // Auto-add https:// if no scheme
+                                        if (!testUrl.startsWith("http://") && !testUrl.startsWith("https://")) {
+                                            testUrl = "https://$testUrl"
+                                        }
                                         val conn = URL(testUrl).openConnection() as HttpURLConnection
-                                        conn.connectTimeout = 5000
-                                        conn.readTimeout = 5000
+                                        conn.connectTimeout = 8000
+                                        conn.readTimeout = 8000
                                         conn.instanceFollowRedirects = false
                                         conn.requestMethod = "GET"
                                         val start = System.currentTimeMillis()
@@ -257,7 +280,7 @@ private fun EmptyServerState(modifier: Modifier = Modifier) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun ServerCard(
     server: ServerConfig,
@@ -273,18 +296,76 @@ private fun ServerCard(
     onDelete: () -> Unit,
 ) {
     val isConnected = status?.status == "connected"
-    val cardColors = CardDefaults.elevatedCardColors(
-        containerColor = MaterialTheme.colorScheme.surfaceContainer,
-        contentColor = MaterialTheme.colorScheme.onSurface,
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = {
+            if (it == SwipeToDismissBoxValue.EndToStart) {
+                showDeleteDialog = true
+            }
+            false // Don't actually dismiss, just show dialog
+        }
     )
-    ElevatedCard(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = cardColors,
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp),
+
+    // Long-press delete confirmation dialog
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("删除服务器") },
+            text = { Text("确定要删除「${server.name.ifBlank { server.ssh.host }}」吗？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteDialog = false
+                        onDelete()
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ),
+                ) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) { Text("取消") }
+            },
+        )
+    }
+
+    SwipeToDismissBox(
+        state = dismissState,
+        backgroundContent = {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.errorContainer)
+                    .padding(end = 20.dp),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = "删除",
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.size(28.dp),
+                )
+            }
+        },
+        enableDismissFromStartToEnd = false,
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        val cardColors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+        )
+        ElevatedCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = { showDeleteDialog = true },
+                ),
+            shape = RoundedCornerShape(16.dp),
+            colors = cardColors,
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp),
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
             // Header row: icon + name + status dot
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -330,8 +411,12 @@ private fun ServerCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                // Status indicator dot
-                StatusDot(connected = isConnected, running = vpnRunning)
+                // VPN toggle button — top right corner
+                VpnToggleButton(
+                    vpnRunning = vpnRunning,
+                    vpnStarting = vpnStarting,
+                    onToggle = onVpnToggle,
+                )
             }
 
             // Exit IP / test result
@@ -371,55 +456,19 @@ private fun ServerCard(
 
             Spacer(Modifier.height(12.dp))
 
-            // Action buttons row
+            // Action buttons row: terminal+test on right
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // VPN toggle button — primary action
-                Button(
-                    onClick = onVpnToggle,
-                    modifier = Modifier.weight(1f),
-                    enabled = !vpnStarting,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = if (vpnRunning || vpnStarting) {
-                        ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer,
-                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                        )
-                    } else {
-                        ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary,
-                        )
-                    },
-                ) {
-                    if (vpnStarting) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary,
-                        )
-                    } else {
-                        Icon(
-                            if (vpnRunning) Icons.Filled.Stop else Icons.Filled.PlayArrow,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        if (vpnStarting) "连接中" else if (vpnRunning) "停止" else "启动 VPN",
-                        fontWeight = FontWeight.Medium,
-                    )
-                }
-                // Terminal button
+                Spacer(Modifier.weight(1f))
+                // Terminal button — right
                 OutlinedIconButton(
                     icon = Icons.Filled.Terminal,
                     contentDescription = "终端",
                     onClick = onTerminal,
                 )
-                // Test button
+                // Test button — right
                 OutlinedIconButton(
                     icon = Icons.Filled.Speed,
                     contentDescription = "测试",
@@ -427,15 +476,55 @@ private fun ServerCard(
                     enabled = !testing,
                     loading = testing,
                 )
-                // Delete button
-                OutlinedIconButton(
-                    icon = Icons.Filled.Delete,
-                    contentDescription = "删除",
-                    onClick = onDelete,
-                    tint = MaterialTheme.colorScheme.error,
-                )
             }
         }
+        }
+    }
+}
+
+@Composable
+private fun VpnToggleButton(
+    vpnRunning: Boolean,
+    vpnStarting: Boolean,
+    onToggle: () -> Unit,
+) {
+    val containerColor = if (vpnRunning || vpnStarting)
+        MaterialTheme.colorScheme.errorContainer
+    else
+        MaterialTheme.colorScheme.primary
+    val contentColor = if (vpnRunning || vpnStarting)
+        MaterialTheme.colorScheme.onErrorContainer
+    else
+        MaterialTheme.colorScheme.onPrimary
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(containerColor)
+            .clickable(enabled = !vpnStarting, onClick = onToggle)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (vpnStarting) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 2.dp,
+                color = contentColor,
+            )
+        } else {
+            Icon(
+                if (vpnRunning) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = contentColor,
+            )
+        }
+        Text(
+            if (vpnStarting) "连接中" else if (vpnRunning) "停止" else "启动VPN",
+            color = contentColor,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }
 

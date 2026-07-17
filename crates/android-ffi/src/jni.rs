@@ -130,6 +130,7 @@ pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeSetDataDir(
         for server in config.servers.iter() {
             let instance = Arc::new(ServerInstance::new(server.clone()));
             let _ = rt.block_on(instance.set_trigger_templates(templates.clone()));
+            let _ = rt.block_on(instance.set_triggers(server.triggers.clone()));
             let _ = rt.block_on(instance.set_socket_protector(Arc::new(crate::network::AndroidSocketProtector)));
             st.servers.insert(server.id.clone(), instance);
         }
