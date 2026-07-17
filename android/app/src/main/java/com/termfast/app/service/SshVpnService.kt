@@ -82,6 +82,8 @@ class SshVpnService : VpnService() {
             Thread {
                 try {
                     RustBridge.nativeStopVpn(serverId)
+                    RustBridge.nativeStopProxy(serverId)
+                    RustBridge.nativeDisconnectServer(serverId)
                     RustBridge.nativeClearProtectCallback()
                 } catch (e: Exception) {
                     Log.e(TAG, "Error stopping VPN", e)
