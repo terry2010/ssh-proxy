@@ -2,6 +2,8 @@ package com.termfast.app.ui.screen
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -17,7 +19,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -52,9 +53,10 @@ fun TerminalScreen(navController: NavController, serverId: String) {
             when (event) {
                 is RustEvent.TerminalData -> {
                     if (event.session_id == sessionId) {
-                        val newLines = event.data.split("\n")
+                        // Strip ANSI escape codes (color codes like \u001B[0m, \u001B[01;34m)
+                        val clean = event.data.replace(Regex("\u001B\\[[0-9;]*[a-zA-Z]"), "")
+                        val newLines = clean.split("\n")
                         outputLines = outputLines + newLines
-                        // Auto-scroll to bottom
                         if (outputLines.isNotEmpty()) {
                             listState.animateScrollToItem(outputLines.size - 1)
                         }
@@ -130,7 +132,6 @@ fun TerminalScreen(navController: NavController, serverId: String) {
                     Text(
                         "SSH 终端",
                         fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.Monospace,
                     )
                 },
                 navigationIcon = {
@@ -174,7 +175,6 @@ fun TerminalScreen(navController: NavController, serverId: String) {
                         Text(
                             "正在连接终端...",
                             color = terminalFg,
-                            fontFamily = FontFamily.Monospace,
                             fontSize = 14.sp,
                         )
                     }
@@ -186,14 +186,12 @@ fun TerminalScreen(navController: NavController, serverId: String) {
                         Text(
                             "⚠ $errorMsg",
                             color = MaterialTheme.colorScheme.error,
-                            fontFamily = FontFamily.Monospace,
                             fontSize = 14.sp,
                         )
                         Spacer(Modifier.height(12.dp))
                         Text(
                             "请先在服务器详情页启动 VPN 或代理",
                             color = terminalFg.copy(alpha = 0.6f),
-                            fontFamily = FontFamily.Monospace,
                             fontSize = 12.sp,
                         )
                     }
@@ -206,7 +204,6 @@ fun TerminalScreen(navController: NavController, serverId: String) {
                             Text(
                                 line,
                                 color = terminalFg,
-                                fontFamily = FontFamily.Monospace,
                                 fontSize = 13.sp,
                                 lineHeight = 18.sp,
                                 modifier = Modifier.fillMaxWidth(),
@@ -255,31 +252,34 @@ private fun TerminalInputBar(
             .fillMaxWidth()
             .background(inputBg)
             .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.Bottom,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         // Prompt symbol
         Text(
             "$ ",
             color = accentColor,
-            fontFamily = FontFamily.Monospace,
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(bottom = 12.dp),
         )
-        // Input field
+        // Input field — multiline, max 5 lines, scrollable
         OutlinedTextField(
             value = text,
             onValueChange = onTextChange,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .heightIn(max = 100.dp)
+                .verticalScroll(rememberScrollState()),
             placeholder = {
                 Text(
                     "输入命令...",
                     color = terminalFg.copy(alpha = 0.4f),
-                    fontFamily = FontFamily.Monospace,
                     fontSize = 14.sp,
                 )
             },
-            singleLine = true,
+            singleLine = false,
+            maxLines = 5,
             shape = RoundedCornerShape(8.dp),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedTextColor = terminalFg,
@@ -291,10 +291,9 @@ private fun TerminalInputBar(
                 unfocusedContainerColor = Color.Transparent,
             ),
             textStyle = androidx.compose.ui.text.TextStyle(
-                fontFamily = FontFamily.Monospace,
                 fontSize = 14.sp,
             ),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
             trailingIcon = null,
         )
         // Send button
@@ -304,7 +303,8 @@ private fun TerminalInputBar(
             modifier = Modifier
                 .size(40.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(if (text.isNotEmpty()) accentColor else inputBorder),
+                .background(if (text.isNotEmpty()) accentColor else inputBorder)
+                .align(Alignment.Bottom),
         ) {
             Icon(
                 Icons.Filled.Send,

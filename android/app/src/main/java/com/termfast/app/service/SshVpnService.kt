@@ -32,6 +32,10 @@ class SshVpnService : VpnService() {
         @Volatile
         private var state = VpnState.STOPPED
 
+        @Volatile
+        var activeServerId: String = ""
+            private set
+
         fun isRunning(context: Context): Boolean = state == VpnState.RUNNING
         fun isStarting(context: Context): Boolean = state == VpnState.STARTING
         fun isActive(context: Context): Boolean = state != VpnState.STOPPED
@@ -74,6 +78,7 @@ class SshVpnService : VpnService() {
         if (intent.getStringExtra("action") == "stop") {
             Log.i(TAG, "Stop action received")
             state = VpnState.STOPPED
+            activeServerId = ""
             Thread {
                 try {
                     RustBridge.nativeStopVpn(serverId)
@@ -89,6 +94,7 @@ class SshVpnService : VpnService() {
         }
 
         serverId = intent.getStringExtra(EXTRA_SERVER_ID) ?: ""
+        activeServerId = serverId
         val mtu = intent.getIntExtra(EXTRA_MTU, 1400)
         val socks5Port = intent.getIntExtra(EXTRA_SOCKS5_PORT, 1080)
         val ipv6 = intent.getBooleanExtra("ipv6", true)
@@ -187,10 +193,14 @@ class SshVpnService : VpnService() {
                 .addRoute("0.0.0.0", 0)
                 .setUnderlyingNetworks(null)
 
-            // DNS
-            builder.addDnsServer("8.8.8.8")
+            // DNS — with Virtual DNS (dns=none), tun2proxy intercepts all DNS
+            // queries and returns fake IPs. The addDnsServer address is only
+            // used by the system for DoT/DoH fallback. Use 223.5.5.5 (Alibaba
+            // DNS) which is reachable from both China and overseas servers,
+            // avoiding Google DoT connection failures on China-based servers.
+            builder.addDnsServer("223.5.5.5")
             if (ipv6) {
-                builder.addDnsServer("2001:4860:4860::8888")
+                builder.addDnsServer("2400:3200::1")
             }
 
             if (ipv6) {

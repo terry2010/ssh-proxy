@@ -44,7 +44,7 @@ aes-gcm = "0.10"
 argon2 = "0.5"
 
 # Logging
-tracing = "0.1"
+tracing = { version = "0.1", features = ["log"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Error handling
