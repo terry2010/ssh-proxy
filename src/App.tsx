@@ -71,6 +71,11 @@ export default function App() {
       }
     })();
 
+    // Try auto-unlock with cached key on startup (no UI blocking).
+    ipcInvoke<boolean>("ipc_try_cached_unlock").catch(() => {
+      // Silently ignore — user can unlock manually in settings.
+    });
+
     ipcInvoke<any>("ipc_get_config")
       .then((data) => {
         if (data) {
