@@ -640,6 +640,8 @@ function CredentialSection() {
   const { t } = useTranslation();
   const [credStatus, setCredStatus] = useState<string>("pending");
   const [showSetup, setShowSetup] = useState(false);
+  const [showUnlock, setShowUnlock] = useState(false);
+  const [unlockPw, setUnlockPw] = useState("");
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [showReset, setShowReset] = useState(false);
   const [setupPw, setSetupPw] = useState("");
@@ -676,6 +678,22 @@ function CredentialSection() {
       setBusy(false);
     }
   }, [setupPw, setupConfirmPw, t, refreshStatus]);
+
+  const handleUnlock = useCallback(async () => {
+    if (!unlockPw) return;
+    setBusy(true);
+    try {
+      await ipcInvoke("ipc_unlock_credentials", { masterPassword: unlockPw });
+      toast.success(t("credentials.unlock_button"));
+      setShowUnlock(false);
+      setUnlockPw("");
+      refreshStatus();
+    } catch (e: any) {
+      toast.error(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [unlockPw, t, refreshStatus]);
 
   const handleChangePassword = useCallback(async () => {
     if (newPw !== confirmPw || newPw.length < 4) return;
@@ -767,6 +785,7 @@ function CredentialSection() {
   }, [importPath, importPw, t, refreshStatus]);
 
   const isPending = credStatus === "pending";
+  const isLocked = credStatus === "locked";
 
   return (
     <section className="space-y-4 pt-4">
@@ -785,6 +804,18 @@ function CredentialSection() {
               className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
             >
               {t("credentials.setup_button")}
+            </button>
+          </SettingItem>
+        ) : isLocked ? (
+          <SettingItem
+            label={t("credentials.unlock_button")}
+            hint={t("credentials.unlock_description")}
+          >
+            <button
+              onClick={() => setShowUnlock(true)}
+              className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
+            >
+              {t("credentials.unlock_button")}
             </button>
           </SettingItem>
         ) : (
@@ -880,6 +911,45 @@ function CredentialSection() {
                 className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
               >
                 {busy ? t("common.loading") : t("credentials.setup_button")}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Unlock password modal */}
+      {showUnlock && (
+        <Modal
+          title={t("credentials.unlock_button")}
+          onClose={() => setShowUnlock(false)}
+        >
+          <div className="p-6 space-y-4">
+            <h3 className="text-lg font-semibold">
+              {t("credentials.unlock_button")}
+            </h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              {t("credentials.unlock_description")}
+            </p>
+            <input
+              type="password"
+              placeholder={t("credentials.master_password")}
+              value={unlockPw}
+              onChange={(e) => setUnlockPw(e.target.value)}
+              className="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#2A2A2A] text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 outline-none"
+            />
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowUnlock(false)}
+                className="px-4 py-2 rounded-lg text-gray-600 dark:text-gray-400 text-sm"
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                onClick={handleUnlock}
+                disabled={busy || !unlockPw}
+                className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+              >
+                {busy ? t("common.loading") : t("credentials.unlock_button")}
               </button>
             </div>
           </div>

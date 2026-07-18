@@ -4,6 +4,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { ipcInvoke, formatIpcError, IpcErrorImpl } from "@/hooks/useIpc";
+import { toast } from "sonner";
 import { Modal } from "@/components/ui/Modal";
 import { useServerStore } from "@/stores/serverStore";
 
@@ -120,8 +121,13 @@ export function AddServerDialog({
               credentialType: "password",
               value: password,
             });
-          } catch (credErr) {
-            console.error("save credential failed:", credErr);
+          } catch (credErr: any) {
+            const msg = credErr?.message || String(credErr);
+            if (msg.includes("locked")) {
+              toast.error("凭据库已锁定，请先在设置页面解锁凭据");
+            } else {
+              toast.error("保存密码失败: " + msg);
+            }
           }
         }
       } else {
@@ -172,11 +178,20 @@ export function AddServerDialog({
         // Save password to credential store if auth method is password
         const finalId = result?.server_id || serverId;
         if (authType === "password" && password) {
-          await ipcInvoke("ipc_save_credential", {
-            serverId: finalId,
-            credentialType: "password",
-            value: password,
-          });
+          try {
+            await ipcInvoke("ipc_save_credential", {
+              serverId: finalId,
+              credentialType: "password",
+              value: password,
+            });
+          } catch (credErr: any) {
+            const msg = credErr?.message || String(credErr);
+            if (msg.includes("locked")) {
+              toast.error("凭据库已锁定，请先在设置页面解锁凭据");
+            } else {
+              toast.error("保存密码失败: " + msg);
+            }
+          }
         }
       }
       onAdd();
