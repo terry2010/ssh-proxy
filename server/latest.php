@@ -8,11 +8,13 @@
  *   1. 检查本地缓存（5 分钟）
  *   2. 缓存过期 → 调 GitHub API 获取最新 Release
  *   3. 根据客户端 IP 判断国内外
- *      国内 → 下载 URL 用 termfast.xisj.com/releases/（自建反代）
+ *      国内 → 下载 URL 用第三方 GitHub 代理（gh-proxy.com）
  *      海外 → 下载 URL 用 github.com 直连
- *   4. 返回 Tauri updater 格式的 latest.json
+ *   4. 代理不可用时自动降级为 GitHub 直连
+ *   5. 返回 Tauri updater 格式的 latest.json
  *
- * 零维护: 只需在 GitHub 打 tag 发 Release，PHP 自动抓取。
+ * 服务器只返回 1KB JSON，下载流量不经过本服务器。
+ * 代理挂了只需改本文件 $proxyPrefix，无需重新发版。
  */
 
 require_once __DIR__ . '/lib/geoip.php';
@@ -23,7 +25,7 @@ header('Content-Type: application/json; charset=utf-8');
 $repo = 'terry2010/termfast';
 $cacheFile = sys_get_temp_dir() . '/termfast_latest_cache.json';
 $cacheTtl = 300; // 5 分钟缓存
-$proxyBase = 'https://termfast.xisj.com/releases/';
+$proxyPrefix = 'https://gh-proxy.com/'; // 第三方 GitHub 代理（国内加速）
 $githubBase = "https://github.com/{$repo}/releases/download/";
 
 // === 获取客户端 IP ===
@@ -42,7 +44,7 @@ if (!$release) {
 }
 
 // === 构建 Tauri updater manifest ===
-$manifest = buildManifest($release, $useProxy, $proxyBase, $githubBase);
+$manifest = buildManifest($release, $useProxy, $proxyPrefix, $githubBase);
 
 if (empty($manifest['platforms'])) {
     http_response_code(404);
@@ -99,9 +101,9 @@ function fetchRelease(string $repo, string $cacheFile, int $cacheTtl): ?array {
 
 /**
  * 构建 Tauri updater manifest。
- * 根据客户端 IP 选择下载 URL（国内反代 / 海外直连）。
+ * 根据客户端 IP 选择下载 URL（国内第三方代理 / 海外直连）。
  */
-function buildManifest(array $release, bool $useProxy, string $proxyBase, string $githubBase): array {
+function buildManifest(array $release, bool $useProxy, string $proxyPrefix, string $githubBase): array {
     $version = ltrim($release['tag_name'] ?? '', 'v');
     $notes = $release['body'] ?? '';
     $pubDate = $release['published_at'] ?? date('c');
@@ -122,7 +124,7 @@ function buildManifest(array $release, bool $useProxy, string $proxyBase, string
         if ($sig) {
             $platforms['darwin-aarch64'] = [
                 'signature' => $sig,
-                'url' => assetUrl($macAsset['name'], $useProxy, $proxyBase, $githubBase),
+                'url' => assetUrl($macAsset['name'], $useProxy, $proxyPrefix, $githubBase),
             ];
         }
     }
@@ -134,7 +136,7 @@ function buildManifest(array $release, bool $useProxy, string $proxyBase, string
         if ($sig) {
             $platforms['windows-x86_64'] = [
                 'signature' => $sig,
-                'url' => assetUrl($winAsset['name'], $useProxy, $proxyBase, $githubBase),
+                'url' => assetUrl($winAsset['name'], $useProxy, $proxyPrefix, $githubBase),
             ];
         }
     }
@@ -187,11 +189,51 @@ function fetchSignature(array $assetMap, string $assetName): ?string {
 
 /**
  * 根据客户端 IP 选择下载 URL。
+ * 国内 → 第三方 GitHub 代理（gh-proxy.com）
+ * 海外 → GitHub 直连
+ * 代理不可用时自动降级为直连。
  */
-function assetUrl(string $assetName, bool $useProxy, string $proxyBase, string $githubBase): string {
+function assetUrl(string $assetName, bool $useProxy, string $proxyPrefix, string $githubBase): string {
     $encoded = urlencode($assetName);
-    if ($useProxy) {
-        return $proxyBase . $encoded;
+    $directUrl = $githubBase . $encoded;
+
+    if (!$useProxy) {
+        return $directUrl;
     }
-    return $githubBase . $encoded;
+
+    // 国内用户：用第三方代理，代理不可用则降级为直连
+    if (!isProxyAlive($proxyPrefix)) {
+        return $directUrl;
+    }
+
+    return $proxyPrefix . $directUrl;
+}
+
+/**
+ * 检测第三方代理是否可用（1 秒超时）。
+ * 结果缓存 60 秒，避免每次请求都检测。
+ */
+function isProxyAlive(string $proxyPrefix): bool {
+    $cacheFile = sys_get_temp_dir() . '/termfast_proxy_alive.cache';
+    $cacheTtl = 60; // 60 秒缓存
+
+    if (file_exists($cacheFile) && (time() - filemtime($cacheFile)) < $cacheTtl) {
+        return file_get_contents($cacheFile) === '1';
+    }
+
+    $ch = curl_init($proxyPrefix);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 1,
+        CURLOPT_NOBODY => true, // HEAD 请求
+        CURLOPT_FOLLOWLOCATION => true,
+    ]);
+    curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    $alive = $code > 0 && $code < 500;
+    file_put_contents($cacheFile, $alive ? '1' : '0');
+
+    return $alive;
 }

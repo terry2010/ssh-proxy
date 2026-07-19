@@ -84,8 +84,10 @@ edit(file_path="big_file.rs", old_string="// === SECTION 2 END ===",
 - 备用清单：`latest.json` 仍部署到 GitHub Pages（`gh-pages` 分支）作为 fallback
 - 安装包存储：GitHub Releases
 - 国内加速：`latest.php` 根据客户端 IP（GeoLite2-City 数据库）智能选源
-  - 国内 → `termfast.xisj.com/releases/`（Nginx 反代 GitHub Releases）
+  - 国内 → 第三方 GitHub 代理（`gh-proxy.com`），代理不可用时自动降级为直连
   - 海外 → `github.com` 直连
+- 服务器只返回 1KB JSON，下载流量不经过服务器
+- 代理挂了只需改 `latest.php` 里的 `$proxyPrefix`，无需重新发版
 
 ### 服务器端文件（`server/` 目录）
 
@@ -114,28 +116,12 @@ edit(file_path="big_file.rs", old_string="// === SECTION 2 END ===",
    - 下载 GeoLite2-City.mmdb 放到 `server/data/`
    - 或用 `geoipupdate` 工具自动更新
 4. Nginx 配置：
-   - PHP 文件放到 `/var/www/html/tools/`
-   - 加 `/releases/` 反代 location（见下方 Nginx 配置）
+   - PHP 文件放到网站目录（如 `/htdocs/termfast.xisj.com/tools/`）
+   - 不需要额外的 Nginx 反代配置（下载走第三方代理，不经过服务器）
 5. crontab 每月自动更新 GeoIP 数据库：
    ```bash
    0 0 1 * * /usr/bin/geoipupdate
    ```
-
-### Nginx 配置（GitHub Releases 反代）
-
-```nginx
-# 反代 GitHub Releases 下载，供国内用户加速
-location /releases/ {
-    proxy_pass https://github.com/terry2010/termfast/releases/download/;
-    proxy_set_header Host github.com;
-    proxy_set_header Accept-Encoding "";
-    proxy_ssl_server_name on;
-    proxy_buffering on;
-    proxy_max_temp_file_size 1g;
-    # 缓存大文件 1 小时
-    proxy_cache_valid 200 1h;
-}
-```
 
 ### 首次配置（每个仓库只需一次）
 
