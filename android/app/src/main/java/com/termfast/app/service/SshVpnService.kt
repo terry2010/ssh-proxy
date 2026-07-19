@@ -75,6 +75,9 @@ class SshVpnService : VpnService() {
             lastError = null
             failedServerId = null
             mismatchedHostKey = null
+            if (state == VpnState.FAILED) {
+                state = VpnState.STOPPED
+            }
         }
 
         fun start(context: Context, serverId: String, settings: AppSettings = AppSettings(), socks5Port: Int = 1080) {
