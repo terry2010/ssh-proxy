@@ -22,6 +22,7 @@ import com.termfast.app.data.ServerConfig
 import com.termfast.app.data.SshConfig
 import com.termfast.app.data.ProxyConfig
 import com.termfast.app.data.IpCheckConfig
+import com.termfast.app.service.SshVpnService
 import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -125,6 +126,9 @@ fun ServerEditScreen(navController: NavController, serverId: String?) {
                         if (keyContent.isNotEmpty()) repo.saveCredential(id, "key", keyContent)
                         if (keyPassphrase.isNotEmpty()) repo.saveCredential(id, "key_passphrase", keyPassphrase)
                     }
+                    // Clear any previous VPN error so the server card doesn't
+                    // show a stale "missing password" banner after saving.
+                    SshVpnService.clearError()
                     navController.popBackStack()
                 },
                 containerColor = MaterialTheme.colorScheme.primary,
