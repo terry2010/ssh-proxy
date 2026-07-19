@@ -192,6 +192,7 @@ mod tests {
                 key_auto_generated: false,
                 connection_mode: "single".to_string(),
                 skip_hostkey_verify: true,
+                host_key_fingerprint: None,
             },
             proxy: termfast_core::config::ProxyConfig {
                 enabled: false,
@@ -206,6 +207,7 @@ mod tests {
             last_known_ip: None,
             triggers: vec![],
             suppress_firewall_badge: false,
+            test_url: String::new(),
         }
     }
 

@@ -60,7 +60,6 @@ pub fn run() {
                         if let Some(win) = app_handle.get_webview_window("main") {
                             let _ = win.hide();
                         }
-                        return;
                     }
 
                     #[cfg(not(target_os = "macos"))]
@@ -106,7 +105,7 @@ pub fn run() {
             // Open DevTools in dev mode for debugging
             #[cfg(debug_assertions)]
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.open_devtools();
+                window.open_devtools();
             }
 
             // Apply window vibrancy effect (FP-6.10)
@@ -286,6 +285,7 @@ async fn ipc_get_config(state: tauri::State<'_, AppState>) -> Result<serde_json:
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn ipc_update_general_config(
     state: tauri::State<'_, AppState>,
     theme: Option<String>,
@@ -425,6 +425,7 @@ async fn ipc_reorder_servers(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn ipc_update_server(
     state: tauri::State<'_, AppState>,
     server_id: String,

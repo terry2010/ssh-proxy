@@ -55,7 +55,11 @@ class MainActivity : ComponentActivity() {
         val dataDir = filesDir.absolutePath
         RustRepository.init(dataDir)
         // Try auto-unlock with cached derived key (no user prompt).
-        CredentialManager.tryCachedUnlock(this)
+        // Run on IO dispatcher to avoid ANR — Argon2id key derivation
+        // (32 MiB memory) can take 200-500ms on low-end devices.
+        CoroutineScope(Dispatchers.IO).launch {
+            CredentialManager.tryCachedUnlock(this@MainActivity)
+        }
         NotificationHelper.ensureChannels(this)
         requestNotificationPermission()
         handleStartVpnIntent(intent)

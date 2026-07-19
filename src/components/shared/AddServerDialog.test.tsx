@@ -10,9 +10,11 @@ vi.mock("@/hooks/useIpc", () => ({
 describe("AddServerDialog", () => {
   it("renders dialog with add server title", () => {
     render(<AddServerDialog onAdd={vi.fn()} onCancel={vi.fn()} />);
-    // t("server.add") renders as heading
-    const heading = screen.getByRole("heading");
-    expect(heading).toBeInTheDocument();
+    // t("server.add") renders as the dialog's main heading (h2)
+    const headings = screen.getAllByRole("heading");
+    const mainHeading = headings.find((h) => h.tagName === "H2");
+    expect(mainHeading).toBeDefined();
+    expect(mainHeading?.textContent).toBe("server.add");
   });
 
   it("has input fields for server config", () => {

@@ -28,6 +28,7 @@ fn make_test_server(id: &str, name: &str) -> ServerConfig {
             key_auto_generated: false,
             connection_mode: "single".into(),
             skip_hostkey_verify: true,
+            host_key_fingerprint: None,
         },
         proxy: ProxyConfig {
             enabled: false,
@@ -45,6 +46,7 @@ fn make_test_server(id: &str, name: &str) -> ServerConfig {
         last_known_ip: None,
         triggers: Vec::new(),
         suppress_firewall_badge: false,
+        test_url: String::new(),
     }
 }
 
