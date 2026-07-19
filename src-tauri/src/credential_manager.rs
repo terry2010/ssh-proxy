@@ -8,7 +8,7 @@
 //!   reset / export / import / lock.
 
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex};
 use tauri::State;
 use termfast_credential::EncryptedFileCredentialStore;
 
@@ -19,7 +19,10 @@ const KEYCHAIN_ENTRY: &str = "credential_master_key";
 /// In-memory cache of the keychain value to avoid repeated Touch ID prompts.
 /// On macOS, every keychain access triggers a Touch ID/password prompt.
 /// We cache the result so we only hit the keychain once per process.
-static CACHED_KEYCHAIN_KEY: OnceLock<Option<termfast_credential::DerivedKey>> = OnceLock::new();
+/// Uses Mutex (not OnceLock) to prevent race conditions when multiple
+/// callers try to load the key simultaneously (e.g. React StrictMode).
+/// Outer Option = whether we've queried yet; inner Option = the key value.
+static CACHED_KEYCHAIN_KEY: Mutex<Option<Option<termfast_credential::DerivedKey>>> = Mutex::new(None);
 
 /// Tauri-managed state holding the encrypted credential store.
 pub struct CredentialState {
@@ -50,15 +53,18 @@ pub fn credential_file_path() -> PathBuf {
 }
 
 /// Try to read the cached derived key from the OS keychain.
-/// Uses an in-memory cache to avoid repeated Touch ID prompts on macOS.
-/// Returns `None` if no cached key exists or keychain is unavailable.
+/// Uses an in-memory cache with Mutex to avoid repeated Touch ID prompts.
+/// The Mutex prevents race conditions when multiple callers try to load
+/// the key simultaneously (e.g. React StrictMode double-invoke).
 fn load_cached_key() -> Option<termfast_credential::DerivedKey> {
-    // Return cached result if we've already queried the keychain this session.
-    if let Some(cached) = CACHED_KEYCHAIN_KEY.get() {
+    let mut guard = CACHED_KEYCHAIN_KEY.lock().unwrap();
+    if let Some(cached) = &*guard {
+        // Already queried — return cached result (no keychain access).
         return cached.clone();
     }
+    // First time — actually query the keychain while holding the lock.
     let result = load_cached_key_from_keychain();
-    let _ = CACHED_KEYCHAIN_KEY.set(result.clone());
+    *guard = Some(result.clone());
     result
 }
 
@@ -85,7 +91,7 @@ fn load_cached_key_from_keychain() -> Option<termfast_credential::DerivedKey> {
 /// Also updates the in-memory cache so subsequent reads don't hit the keychain.
 fn save_cached_key(key: &termfast_credential::DerivedKey) {
     // Update in-memory cache first.
-    let _ = CACHED_KEYCHAIN_KEY.set(Some(key.clone()));
+    *CACHED_KEYCHAIN_KEY.lock().unwrap() = Some(Some(key.clone()));
     let encoded = base64_encode(key.as_bytes());
     match keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ENTRY) {
         Ok(entry) => {
@@ -101,6 +107,8 @@ fn save_cached_key(key: &termfast_credential::DerivedKey) {
 
 /// Delete the cached derived key from the OS keychain.
 fn delete_cached_key() {
+    // Clear in-memory cache.
+    *CACHED_KEYCHAIN_KEY.lock().unwrap() = Some(None);
     if let Ok(entry) = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ENTRY) {
         let _: Result<(), _> = entry.delete_credential();
     }
