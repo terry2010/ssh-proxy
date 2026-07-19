@@ -1,7 +1,8 @@
 //! Cloud sync — upload/download encrypted config to cloud providers.
 //!
-//! Supports Dropbox (PKCE OAuth) and Baidu Netdisk (implicit grant).
-//! Neither requires embedding client_secret in the app binary.
+//! Supports Dropbox (PKCE OAuth) and Baidu Netdisk (Authorization Code flow).
+//! Both use a proxy server for OAuth token exchange — no app_key or
+//! client_secret is embedded in the app binary.
 //!
 //! Sync data is always encrypted with the user's master password before
 //! upload, so the cloud provider only sees ciphertext.
@@ -169,6 +170,13 @@ impl From<serde_json::Error> for CloudSyncError {
 
 /// Default sync file path on cloud storage
 pub const SYNC_FILE_PATH: &str = "/TermFast/config.enc";
+
+/// Cloud sync proxy server — handles OAuth token exchange.
+/// App does NOT hold app_secret; all secret-holding operations go through
+/// this server. The server only participates in token exchange, never
+/// touches user data (config is encrypted with master password, uploaded
+/// directly from App to cloud API).
+pub const CLOUD_SYNC_SERVER: &str = "https://termfast.xisj.com/tools/cloud-sync.php";
 
 /// Helper: generate a random PKCE code_verifier (43-128 chars, RFC 7636)
 pub fn generate_code_verifier() -> String {

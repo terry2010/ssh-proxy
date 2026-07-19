@@ -1106,7 +1106,7 @@ function CloudSyncSection() {
   const [accessToken, setAccessToken] = useState("");
   const [isAuthed, setIsAuthed] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [step, setStep] = useState<"idle" | "auth" | "code" | "token">("idle");
+  const [step, setStep] = useState<"idle" | "code">("idle");
 
   const checkAuth = async () => {
     if (!passphrase) return;
@@ -1131,7 +1131,8 @@ function CloudSyncSection() {
       }>("ipc_cloud_sync_auth_url", { provider });
       setAuthUrl(res.auth_url);
       setCodeVerifier(res.code_verifier ?? "");
-      setStep(res.code_verifier ? "code" : "token");
+      // Both Dropbox and Baidu now use Authorization Code flow via server
+      setStep("code");
       // Open URL in browser
       window.open(res.auth_url, "_blank");
     } catch (e) {
@@ -1184,22 +1185,6 @@ function CloudSyncSection() {
     }
   };
 
-  const saveManualToken = async () => {
-    if (!accessToken.trim()) {
-      toast.error(t("settings.cloud_sync.enter_token"));
-      return;
-    }
-    setBusy(true);
-    try {
-      await saveToken(accessToken.trim());
-      setStep("idle");
-    } catch (e) {
-      toast.error(String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const upload = async () => {
     if (!masterPassword) {
       toast.error(t("settings.cloud_sync.enter_master_password"));
@@ -1207,11 +1192,26 @@ function CloudSyncSection() {
     }
     setBusy(true);
     try {
-      await ipcInvoke("ipc_cloud_sync_upload", {
-        provider,
-        passphrase,
-        master_password: masterPassword,
-      });
+      // Try upload, if token expired try refresh then retry
+      try {
+        await ipcInvoke("ipc_cloud_sync_upload", {
+          provider,
+          passphrase,
+          master_password: masterPassword,
+        });
+      } catch (e) {
+        if (String(e).includes("expired") || String(e).includes("401")) {
+          // Try refresh
+          await ipcInvoke("ipc_cloud_sync_refresh_token", { provider, passphrase });
+          await ipcInvoke("ipc_cloud_sync_upload", {
+            provider,
+            passphrase,
+            master_password: masterPassword,
+          });
+        } else {
+          throw e;
+        }
+      }
       toast.success(t("settings.cloud_sync.upload_success"));
     } catch (e) {
       toast.error(String(e));
@@ -1227,10 +1227,23 @@ function CloudSyncSection() {
     }
     setBusy(true);
     try {
-      const res = await ipcInvoke<{ blob: string; size: number }>(
-        "ipc_cloud_sync_download",
-        { provider, passphrase },
-      );
+      let res: { blob: string; size: number };
+      try {
+        res = await ipcInvoke<{ blob: string; size: number }>(
+          "ipc_cloud_sync_download",
+          { provider, passphrase },
+        );
+      } catch (e) {
+        if (String(e).includes("expired") || String(e).includes("401")) {
+          await ipcInvoke("ipc_cloud_sync_refresh_token", { provider, passphrase });
+          res = await ipcInvoke<{ blob: string; size: number }>(
+            "ipc_cloud_sync_download",
+            { provider, passphrase },
+          );
+        } else {
+          throw e;
+        }
+      }
       // Import the downloaded blob
       await ipcInvoke("ipc_import_full", {
         master_password: masterPassword,
@@ -1332,28 +1345,6 @@ function CloudSyncSection() {
                 className="px-4 py-2 bg-green-500 text-white rounded-lg text-sm font-medium hover:bg-green-600 disabled:opacity-50"
               >
                 {t("settings.cloud_sync.exchange")}
-              </button>
-            </div>
-          )}
-
-          {step === "token" && (
-            <div className="space-y-2 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-              <p className="text-sm text-blue-700 dark:text-blue-300">
-                {t("settings.cloud_sync.paste_token")}
-              </p>
-              <textarea
-                value={accessToken}
-                onChange={(e) => setAccessToken(e.target.value)}
-                placeholder="access_token"
-                rows={3}
-                className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm font-mono"
-              />
-              <button
-                onClick={saveManualToken}
-                disabled={busy || !accessToken.trim()}
-                className="px-4 py-2 bg-green-500 text-white rounded-lg text-sm font-medium hover:bg-green-600 disabled:opacity-50"
-              >
-                {t("settings.cloud_sync.save")}
               </button>
             </div>
           )}

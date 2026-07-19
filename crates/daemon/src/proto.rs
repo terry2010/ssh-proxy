@@ -154,6 +154,7 @@ pub enum Action {
     CloudSyncGetFileInfo,
     CloudSyncDeleteRemote,
     CloudSyncDisconnect,
+    CloudSyncRefreshToken,
 }
 
 /// Event types (daemon → all clients broadcast, §10.6)

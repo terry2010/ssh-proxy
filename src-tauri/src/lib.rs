@@ -231,6 +231,7 @@ pub fn run() {
             ipc_cloud_sync_file_info,
             ipc_cloud_sync_delete_remote,
             ipc_cloud_sync_disconnect,
+            ipc_cloud_sync_refresh_token,
             // Credential encryption management
             credential_manager::ipc_credential_status,
             credential_manager::ipc_initialize_credentials,
@@ -1325,6 +1326,20 @@ async fn ipc_cloud_sync_disconnect(
     forward_to_daemon(
         &state,
         termfast_daemon::proto::Action::CloudSyncDisconnect,
+        serde_json::json!({ "provider": provider, "passphrase": passphrase }),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn ipc_cloud_sync_refresh_token(
+    state: tauri::State<'_, AppState>,
+    provider: String,
+    passphrase: String,
+) -> Result<serde_json::Value, String> {
+    forward_to_daemon(
+        &state,
+        termfast_daemon::proto::Action::CloudSyncRefreshToken,
         serde_json::json!({ "provider": provider, "passphrase": passphrase }),
     )
     .await

@@ -14,18 +14,20 @@ use serde::Deserialize;
 /// Dropbox API base URLs
 const API_BASE: &str = "https://api.dropboxapi.com/2";
 const CONTENT_BASE: &str = "https://content.dropboxapi.com/2";
-const AUTH_BASE: &str = "https://www.dropbox.com/oauth2/authorize";
-const TOKEN_URL: &str = "https://api.dropboxapi.com/oauth2/token";
 
-/// Dropbox provider. app_key is the public app identifier from the
-/// Dropbox Developer Console. No secret is stored.
-pub struct DropboxProvider {
-    app_key: String,
-}
+/// Dropbox provider. No app_key or secret stored in the binary —
+/// all OAuth operations go through the cloud sync proxy server.
+pub struct DropboxProvider;
 
 impl DropboxProvider {
-    pub fn new(app_key: String) -> Self {
-        Self { app_key }
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for DropboxProvider {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -39,12 +41,12 @@ impl CloudProviderTrait for DropboxProvider {
         let code_verifier = generate_code_verifier();
         let code_challenge = compute_code_challenge(&code_verifier);
 
+        // Request auth URL from proxy server (server holds app_key)
         let url = format!(
-            "{}?client_id={}&response_type=code&code_challenge={}&code_challenge_method=S256&redirect_uri={}&token_access_type=offline",
-            AUTH_BASE,
-            urlencoding::encode(&self.app_key),
-            code_challenge,
+            "{}?action=auth_url&provider=dropbox&redirect_uri={}&code_challenge={}",
+            crate::CLOUD_SYNC_SERVER,
             urlencoding::encode(redirect_uri),
+            code_challenge,
         );
 
         (url, Some(code_verifier))
@@ -58,19 +60,15 @@ impl CloudProviderTrait for DropboxProvider {
     ) -> Result<OAuthToken, CloudSyncError> {
         let client = reqwest::Client::new();
 
-        let params = [
-            ("grant_type", "authorization_code"),
-            ("code", code),
-            ("code_verifier", code_verifier),
-            ("client_id", &self.app_key),
-            ("redirect_uri", redirect_uri),
-        ];
+        let body = serde_json::json!({
+            "provider": "dropbox",
+            "code": code,
+            "code_verifier": code_verifier,
+            "redirect_uri": redirect_uri,
+        });
 
-        let resp = client
-            .post(TOKEN_URL)
-            .form(&params)
-            .send()
-            .await?;
+        let url = format!("{}?action=exchange", crate::CLOUD_SYNC_SERVER);
+        let resp = client.post(&url).json(&body).send().await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -94,13 +92,14 @@ impl CloudProviderTrait for DropboxProvider {
             .ok_or(CloudSyncError::TokenExpired)?;
 
         let client = reqwest::Client::new();
-        let params = [
-            ("grant_type", "refresh_token"),
-            ("refresh_token", refresh_token),
-            ("client_id", &self.app_key),
-        ];
 
-        let resp = client.post(TOKEN_URL).form(&params).send().await?;
+        let body = serde_json::json!({
+            "provider": "dropbox",
+            "refresh_token": refresh_token,
+        });
+
+        let url = format!("{}?action=refresh", crate::CLOUD_SYNC_SERVER);
+        let resp = client.post(&url).json(&body).send().await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -302,13 +301,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_auth_url_contains_pkce_params() {
-        let provider = DropboxProvider::new("test_app_key".into());
+    fn test_auth_url_goes_through_server() {
+        let provider = DropboxProvider::new();
         let (url, verifier) = provider.auth_url("http://localhost:12345/callback");
-        assert!(url.contains("code_challenge_method=S256"));
-        assert!(url.contains("response_type=code"));
-        assert!(url.contains("client_id=test_app_key"));
-        assert!(url.contains("token_access_type=offline"));
+        // URL should point to our proxy server
+        assert!(url.contains("termfast.xisj.com"));
+        assert!(url.contains("action=auth_url"));
+        assert!(url.contains("provider=dropbox"));
+        assert!(url.contains("code_challenge="));
         assert!(verifier.is_some());
         assert!(verifier.unwrap().len() >= 43);
     }
@@ -327,6 +327,35 @@ mod tests {
         assert!(!c.contains('='));
         assert!(!c.contains('+'));
         assert!(!c.contains('/'));
+    }
+
+    #[test]
+    fn test_dropbox_token_response_has_refresh() {
+        let resp = DropboxTokenResponse {
+            access_token: "at123".into(),
+            refresh_token: Some("rt456".into()),
+            expires_in: Some(14400),
+            token_type: "bearer".into(),
+        };
+        let token: OAuthToken = resp.into();
+        assert_eq!(token.access_token, "at123");
+        assert_eq!(token.refresh_token.as_deref(), Some("rt456"));
+        assert!(token.expires_at.is_some());
+    }
+
+    #[test]
+    fn test_dropbox_token_response_no_refresh() {
+        let resp = DropboxTokenResponse {
+            access_token: "at789".into(),
+            refresh_token: None,
+            expires_in: None,
+            token_type: "bearer".into(),
+        };
+        let token: OAuthToken = resp.into();
+        assert_eq!(token.access_token, "at789");
+        assert!(token.refresh_token.is_none());
+        assert!(token.expires_at.is_none());
+        assert_eq!(token.token_type, "bearer");
     }
 }
 

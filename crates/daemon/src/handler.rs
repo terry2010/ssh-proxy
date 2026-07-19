@@ -98,6 +98,7 @@ pub async fn handle_request(request: &Request, state: &DaemonState) -> Response 
         Action::CloudSyncGetFileInfo => handle_cloud_sync_file_info(state, &request.params).await,
         Action::CloudSyncDeleteRemote => handle_cloud_sync_delete_remote(state, &request.params).await,
         Action::CloudSyncDisconnect => handle_cloud_sync_disconnect(state, &request.params).await,
+        Action::CloudSyncRefreshToken => handle_cloud_sync_refresh_token(state, &request.params).await,
     };
 
     match result {
@@ -2980,13 +2981,7 @@ async fn log_and_broadcast(
 }
 
 // === SECTION: Cloud sync handlers ===
-
-/// App keys — public identifiers, safe to embed in binary (no secret).
-/// These are placeholder values; replace with real keys from the
-/// Dropbox Developer Console and Baidu Netdisk Open Platform.
-const DROPBOX_APP_KEY: &str = "placeholder_replace_me";
-const BAIDU_APP_KEY: &str = "placeholder_replace_me";
-
+#[allow(clippy::items_after_test_module)]
 /// Get the token file path (stored alongside config).
 fn token_file_path(_state: &DaemonState) -> std::path::PathBuf {
     directories::BaseDirs::new()
@@ -2994,23 +2989,24 @@ fn token_file_path(_state: &DaemonState) -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("cloud_tokens.enc"))
 }
 
-/// Get the sync passphrase — uses the daemon's data dir path as a base.
-/// The user provides their master password for encryption.
+/// Get the sync file path on cloud storage.
 fn sync_path() -> &'static str {
     termfast_cloud_sync::SYNC_FILE_PATH
 }
 
 /// Build a provider instance from the provider type string.
+/// No app_key needed — providers get OAuth URLs and exchange tokens
+/// through the cloud sync proxy server.
 fn build_provider(
     provider: &str,
 ) -> Result<Box<dyn termfast_cloud_sync::CloudProviderTrait>, IpcError> {
     match provider {
-        "dropbox" => Ok(Box::new(termfast_cloud_sync::dropbox::DropboxProvider::new(
-            DROPBOX_APP_KEY.into(),
-        ))),
-        "baidu" => Ok(Box::new(termfast_cloud_sync::baidu::BaiduProvider::new(
-            BAIDU_APP_KEY.into(),
-        ))),
+        "dropbox" => Ok(Box::new(
+            termfast_cloud_sync::dropbox::DropboxProvider::new(),
+        )),
+        "baidu" => Ok(Box::new(
+            termfast_cloud_sync::baidu::BaiduProvider::new(),
+        )),
         _ => Err(IpcError::new(
             ErrorCode::InvalidParams,
             format!("unknown provider: {}", provider),
@@ -3295,6 +3291,51 @@ async fn handle_cloud_sync_disconnect(
         .map_err(|e| IpcError::new(ErrorCode::Internal, format!("save token: {}", e)))?;
 
     Ok(serde_json::json!({ "ok": true }))
+}
+
+async fn handle_cloud_sync_refresh_token(
+    state: &DaemonState,
+    params: &serde_json::Value,
+) -> HandlerResult {
+    let provider = params["provider"]
+        .as_str()
+        .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing provider"))?;
+    let passphrase = params["passphrase"]
+        .as_str()
+        .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing passphrase"))?;
+
+    let path = token_file_path(state);
+    let mut data = termfast_cloud_sync::token_store::load_tokens(&path, passphrase)
+        .map_err(|e| IpcError::new(ErrorCode::Internal, format!("load token: {}", e)))?;
+
+    let stored = data.tokens.get(provider).cloned().ok_or_else(|| {
+        IpcError::new(ErrorCode::CredentialNotFound, "not authenticated to cloud")
+    })?;
+
+    let p = build_provider(provider)?;
+    let new_token = p
+        .refresh_token(&stored.token)
+        .await
+        .map_err(|e| IpcError::new(ErrorCode::Internal, format!("refresh: {}", e)))?;
+
+    // Update stored token
+    data.tokens.insert(
+        provider.to_string(),
+        termfast_cloud_sync::token_store::StoredToken {
+            provider: stored.provider,
+            token: new_token.clone(),
+            stored_at: chrono::Utc::now().timestamp(),
+        },
+    );
+
+    termfast_cloud_sync::token_store::save_tokens(&path, passphrase, &data)
+        .map_err(|e| IpcError::new(ErrorCode::Internal, format!("save token: {}", e)))?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "access_token": new_token.access_token,
+        "expires_at": new_token.expires_at,
+    }))
 }
 
 /// Export the full config as an encrypted blob (reuses ExportFull logic).

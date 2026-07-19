@@ -1,7 +1,8 @@
-//! Baidu Netdisk cloud provider — implicit grant OAuth 2.0.
+//! Baidu Netdisk cloud provider — Authorization Code flow via proxy server.
 //!
-//! No client_secret needed: uses implicit grant flow (response_type=token).
-//! The app_key is a public identifier from Baidu Netdisk Open Platform.
+//! OAuth token exchange goes through a proxy server that holds app_key +
+//! app_secret. The app binary contains no secrets. Uses Authorization Code
+//! flow (not implicit grant) which provides refresh_token (10-year validity).
 //!
 //! Third-party apps are sandboxed to /apps/<app_name>/ directory.
 //!
@@ -13,50 +14,24 @@ use crate::{
 use serde::Deserialize;
 
 /// Baidu API base URLs
-const AUTH_URL: &str = "https://openapi.baidu.com/oauth/2.0/authorize";
 const PCS_BASE: &str = "https://d.pcs.baidu.com";
 const PAN_BASE: &str = "https://pan.baidu.com";
 
-/// Baidu provider. app_key is the public API Key from Baidu Netdisk
-/// Open Platform console. No secret is stored.
-pub struct BaiduProvider {
-    app_key: String,
-}
+/// Baidu provider. No app_key or secret stored in the binary —
+/// all OAuth operations go through the cloud sync proxy server.
+/// Uses Authorization Code flow (via server) which provides refresh_token
+/// (10-year validity), unlike implicit grant which had no refresh.
+pub struct BaiduProvider;
 
 impl BaiduProvider {
-    pub fn new(app_key: String) -> Self {
-        Self { app_key }
+    pub fn new() -> Self {
+        Self
     }
+}
 
-    /// Parse access_token from the redirect URL fragment.
-    /// Baidu implicit grant returns: `#access_token=xxx&expires_in=2592000`
-    pub fn parse_token_from_fragment(fragment: &str) -> Result<OAuthToken, CloudSyncError> {
-        let fragment = fragment.trim_start_matches('#');
-        let mut access_token = None;
-        let mut expires_in: Option<u64> = None;
-
-        for pair in fragment.split('&') {
-            let mut kv = pair.splitn(2, '=');
-            let key = kv.next().unwrap_or("");
-            let val = kv.next().unwrap_or("");
-            match key {
-                "access_token" => access_token = Some(val.to_string()),
-                "expires_in" => expires_in = val.parse().ok(),
-                _ => {}
-            }
-        }
-
-        let access_token =
-            access_token.ok_or_else(|| CloudSyncError::OAuth("no access_token in fragment".into()))?;
-
-        let expires_at = expires_in.map(|secs| chrono::Utc::now().timestamp() + secs as i64);
-
-        Ok(OAuthToken {
-            access_token,
-            refresh_token: None, // implicit grant has no refresh_token
-            expires_at,
-            token_type: "bearer".into(),
-        })
+impl Default for BaiduProvider {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -66,33 +41,74 @@ impl CloudProviderTrait for BaiduProvider {
         CloudProvider::Baidu
     }
 
-    fn auth_url(&self, _redirect_uri: &str) -> (String, Option<String>) {
-        // Implicit grant: response_type=token, redirect_uri=oob
-        // No PKCE needed — token is returned directly in URL fragment
+    fn auth_url(&self, redirect_uri: &str) -> (String, Option<String>) {
+        // Request auth URL from proxy server (server holds app_key)
+        // Baidu Authorization Code flow — returns code, not token directly
         let url = format!(
-            "{}?response_type=token&client_id={}&redirect_uri=oob&scope=basic,netdisk&display=mobile",
-            AUTH_URL,
-            urlencoding::encode(&self.app_key),
+            "{}?action=auth_url&provider=baidu&redirect_uri={}",
+            crate::CLOUD_SYNC_SERVER,
+            urlencoding::encode(redirect_uri),
         );
-        (url, None)
+        (url, None) // No PKCE for Baidu
     }
 
     async fn exchange_code(
         &self,
-        _code: &str,
+        code: &str,
         _code_verifier: &str,
-        _redirect_uri: &str,
+        redirect_uri: &str,
     ) -> Result<OAuthToken, CloudSyncError> {
-        // Implicit grant doesn't use code exchange — token is obtained
-        // directly from the redirect URL fragment.
-        Err(CloudSyncError::OAuth(
-            "Baidu uses implicit grant, not code exchange".into(),
-        ))
+        let client = reqwest::Client::new();
+
+        let body = serde_json::json!({
+            "provider": "baidu",
+            "code": code,
+            "redirect_uri": redirect_uri,
+        });
+
+        let url = format!("{}?action=exchange", crate::CLOUD_SYNC_SERVER);
+        let resp = client.post(&url).json(&body).send().await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(CloudSyncError::OAuth(format!(
+                "token exchange failed ({}): {}",
+                status, body
+            )));
+        }
+
+        let token_resp: BaiduTokenResponse = resp.json().await?;
+        Ok(token_resp.into())
     }
 
-    async fn refresh_token(&self, _token: &OAuthToken) -> Result<OAuthToken, CloudSyncError> {
-        // Implicit grant has no refresh_token — user must re-authorize
-        Err(CloudSyncError::TokenExpired)
+    async fn refresh_token(&self, token: &OAuthToken) -> Result<OAuthToken, CloudSyncError> {
+        let refresh_token = token
+            .refresh_token
+            .as_ref()
+            .ok_or(CloudSyncError::TokenExpired)?;
+
+        let client = reqwest::Client::new();
+
+        let body = serde_json::json!({
+            "provider": "baidu",
+            "refresh_token": refresh_token,
+        });
+
+        let url = format!("{}?action=refresh", crate::CLOUD_SYNC_SERVER);
+        let resp = client.post(&url).json(&body).send().await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(CloudSyncError::OAuth(format!(
+                "refresh failed ({}): {}",
+                status, body
+            )));
+        }
+
+        let token_resp: BaiduTokenResponse = resp.json().await?;
+        Ok(token_resp.into())
     }
 
     // === SECTION baidu_1 END ===
@@ -351,6 +367,33 @@ struct BaiduFileInfo {
     local_mtime: i64,
 }
 
+/// Baidu OAuth token response (Authorization Code flow)
+/// Returns both access_token and refresh_token (10-year validity)
+#[derive(Debug, Deserialize)]
+struct BaiduTokenResponse {
+    access_token: String,
+    refresh_token: String,
+    expires_in: u64,
+    #[serde(default)]
+    token_type: String,
+}
+
+impl From<BaiduTokenResponse> for OAuthToken {
+    fn from(r: BaiduTokenResponse) -> Self {
+        let expires_at = Some(chrono::Utc::now().timestamp() + r.expires_in as i64);
+        OAuthToken {
+            access_token: r.access_token,
+            refresh_token: Some(r.refresh_token),
+            expires_at,
+            token_type: if r.token_type.is_empty() {
+                "bearer".into()
+            } else {
+                r.token_type
+            },
+        }
+    }
+}
+
 /// Compute MD5 hex hash of data (for Baidu block_list)
 fn md5_hex(data: &[u8]) -> String {
     use md5::{Digest, Md5};
@@ -363,37 +406,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_auth_url_implicit_grant() {
-        let provider = BaiduProvider::new("test_app_key".into());
-        let (url, verifier) = provider.auth_url("http://localhost:12345/callback");
-        assert!(url.contains("response_type=token"));
-        assert!(url.contains("client_id=test_app_key"));
+    fn test_auth_url_goes_through_server() {
+        let provider = BaiduProvider::new();
+        let (url, verifier) = provider.auth_url("oob");
+        // URL should point to our proxy server, not baidu directly
+        assert!(url.contains("termfast.xisj.com"));
+        assert!(url.contains("action=auth_url"));
+        assert!(url.contains("provider=baidu"));
         assert!(url.contains("redirect_uri=oob"));
-        assert!(url.contains("display=mobile"));
-        assert!(verifier.is_none()); // No PKCE for implicit grant
+        assert!(verifier.is_none()); // No PKCE for Baidu
     }
 
     #[test]
-    fn test_parse_token_from_fragment() {
-        let fragment = "access_token=abc123&expires_in=2592000";
-        let token = BaiduProvider::parse_token_from_fragment(fragment).unwrap();
-        assert_eq!(token.access_token, "abc123");
+    fn test_baidu_token_response_has_refresh() {
+        let resp = BaiduTokenResponse {
+            access_token: "at123".into(),
+            refresh_token: "rt456".into(),
+            expires_in: 2592000,
+            token_type: "bearer".into(),
+        };
+        let token: OAuthToken = resp.into();
+        assert_eq!(token.access_token, "at123");
+        assert_eq!(token.refresh_token.as_deref(), Some("rt456"));
         assert!(token.expires_at.is_some());
-        assert!(token.refresh_token.is_none());
-    }
-
-    #[test]
-    fn test_parse_token_missing() {
-        let fragment = "expires_in=2592000";
-        let result = BaiduProvider::parse_token_from_fragment(fragment);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_token_with_hash_prefix() {
-        let fragment = "#access_token=xyz789&expires_in=3600";
-        let token = BaiduProvider::parse_token_from_fragment(fragment).unwrap();
-        assert_eq!(token.access_token, "xyz789");
     }
 }
 

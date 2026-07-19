@@ -124,6 +124,36 @@ edit(file_path="big_file.rs", old_string="// === SECTION 2 END ===",
 - `ANDROID_KEYSTORE_BASE64`：GitHub Secret，Android APK 签名密钥（base64 编码）
   - 生成方式：`base64 -i android/app/keystores/release.keystore`
   - CI 中解码后用于 release APK 签名
+- `DROPBOX_APP_KEY`：服务器环境变量，Dropbox 应用 App Key
+  - 从 [Dropbox Developer Console](https://www.dropbox.com/developers/apps) 创建应用后获取
+  - 配置在服务器的 PHP-FPM pool 或 Nginx fastcgi_param 中
+- `DROPBOX_APP_SECRET`：服务器环境变量，Dropbox 应用 Secret（**不存入 App 二进制**）
+- `BAIDU_APP_KEY`：服务器环境变量，百度网盘应用 App Key
+  - 从 [百度网盘开放平台](https://pan.baidu.com/union/) 创建应用后获取
+- `BAIDU_APP_SECRET`：服务器环境变量，百度网盘应用 Secret（**不存入 App 二进制**）
+
+### Cloud Sync 服务器代理架构
+
+云同步功能（Dropbox + 百度网盘）使用服务器代理架构：
+
+- **App 端**：不持有任何 app_key 或 app_secret，OAuth token 交换通过代理服务器进行
+- **服务器端**：`server/cloud-sync.php`，持有 app_key + app_secret，只参与 token 交换
+- **数据传输**：配置文件用主密码加密后由 App 直接上传到云 API，服务器不接触用户数据
+
+**服务器地址**硬编码在 `crates/cloud-sync/src/lib.rs`：
+```rust
+pub const CLOUD_SYNC_SERVER: &str = "https://termfast.xisj.com/tools/cloud-sync.php";
+```
+
+**服务器部署**：
+1. 将 `server/cloud-sync.php` 部署到服务器
+2. 在 Nginx/PHP-FPM 中配置环境变量：
+   - `DROPBOX_APP_KEY`, `DROPBOX_APP_SECRET`
+   - `BAIDU_APP_KEY`, `BAIDU_APP_SECRET`
+3. 确保 HTTPS
+
+**百度网盘**：使用 Authorization Code flow（通过服务器），有 refresh_token（10年有效），可自动续期。
+**Dropbox**：使用 PKCE + 服务器代理换 token，有 refresh_token，可自动续期。
 
 ### Android APK 发布
 
