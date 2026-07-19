@@ -41,12 +41,15 @@ android {
                 }
             }
             storePassword = localProps.getProperty("TERMFAST_STORE_PASSWORD")
+                ?.takeIf { it.isNotBlank() }
                 ?: System.getenv("TERMFAST_STORE_PASSWORD")
                 ?: "termfast"
             keyAlias = localProps.getProperty("TERMFAST_KEY_ALIAS")
+                ?.takeIf { it.isNotBlank() }
                 ?: System.getenv("TERMFAST_KEY_ALIAS")
                 ?: "termfast"
             keyPassword = localProps.getProperty("TERMFAST_KEY_PASSWORD")
+                ?.takeIf { it.isNotBlank() }
                 ?: System.getenv("TERMFAST_KEY_PASSWORD")
                 ?: "termfast"
         }
