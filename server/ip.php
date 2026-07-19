@@ -11,7 +11,7 @@ header('Content-Type: application/json');
 // 优先取真实 IP（处理反代场景）
 $ip = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['HTTP_X_REAL_IP'] ?? $_SERVER['REMOTE_ADDR'] ?? '';
 // X-Forwarded-For 可能含多个 IP，取第一个
-if (str_contains($ip, ',')) {
+if (strpos($ip, ',') !== false) {
     $ip = trim(explode(',', $ip)[0]);
 }
 

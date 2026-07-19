@@ -28,7 +28,7 @@ $githubBase = "https://github.com/{$repo}/releases/download/";
 
 // === 获取客户端 IP ===
 $ip = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['HTTP_X_REAL_IP'] ?? $_SERVER['REMOTE_ADDR'] ?? '';
-if (str_contains($ip, ',')) {
+if (strpos($ip, ',') !== false) {
     $ip = trim(explode(',', $ip)[0]);
 }
 $useProxy = isCN($ip);
@@ -166,7 +166,7 @@ function findAsset(array $assetMap, string $version, array $suffixes): ?array {
     // 兜底：遍历所有 asset 找后缀匹配
     foreach ($assetMap as $name => $asset) {
         foreach ($suffixes as $suffix) {
-            if (str_ends_with($name, $suffix)) return $asset;
+            if (substr($name, -strlen($suffix)) === $suffix) return $asset;
         }
     }
     return null;

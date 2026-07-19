@@ -1,5 +1,6 @@
 {
     "require": {
+        "php": ">=7.4",
         "maxmind-db/reader": "^1.11"
     }
 }

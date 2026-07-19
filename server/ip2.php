@@ -12,7 +12,7 @@ header('Content-Type: application/json; charset=utf-8');
 
 // 优先取真实 IP（处理反代场景）
 $ip = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['HTTP_X_REAL_IP'] ?? $_SERVER['REMOTE_ADDR'] ?? '';
-if (str_contains($ip, ',')) {
+if (strpos($ip, ',') !== false) {
     $ip = trim(explode(',', $ip)[0]);
 }
 
@@ -49,7 +49,7 @@ function parseBrowser(string $ua): array {
     } elseif (preg_match('/Firefox\/([\d.]+)/', $ua, $m)) {
         $browser = 'Firefox';
         $version = $m[1];
-    } elseif (preg_match('/Safari\/([\d.]+)/', $ua, $m) && !str_contains($ua, 'Chrome')) {
+    } elseif (preg_match('/Safari\/([\d.]+)/', $ua, $m) && strpos($ua, 'Chrome') === false) {
         $browser = 'Safari';
         $version = $m[1];
     }
@@ -58,13 +58,13 @@ function parseBrowser(string $ua): array {
     if (preg_match('/Windows NT ([\d.]+)/', $ua, $m)) {
         $osMap = ['10.0' => '10/11', '6.3' => '8.1', '6.2' => '8', '6.1' => '7'];
         $os = 'Windows ' . ($osMap[$m[1]] ?? $m[1]);
-    } elseif (str_contains($ua, 'Mac OS X')) {
+    } elseif (strpos($ua, 'Mac OS X') !== false) {
         $os = 'macOS';
     } elseif (preg_match('/Android ([\d.]+)/', $ua, $m)) {
         $os = 'Android ' . $m[1];
-    } elseif (str_contains($ua, 'iPhone') || str_contains($ua, 'iPad')) {
+    } elseif (strpos($ua, 'iPhone') !== false || strpos($ua, 'iPad') !== false) {
         $os = 'iOS';
-    } elseif (str_contains($ua, 'Linux')) {
+    } elseif (strpos($ua, 'Linux') !== false) {
         $os = 'Linux';
     }
 

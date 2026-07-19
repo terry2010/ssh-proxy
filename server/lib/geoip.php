@@ -61,7 +61,7 @@ function lookupGeo(string $ip): array {
  */
 function isCN(string $ip): bool {
     // 本地/内网 IP 默认当国内（开发环境）
-    if ($ip === '127.0.0.1' || str_starts_with($ip, '192.168.') || str_starts_with($ip, '10.')) {
+    if ($ip === '127.0.0.1' || strpos($ip, '192.168.') === 0 || strpos($ip, '10.') === 0) {
         return true;
     }
     $geo = lookupGeo($ip);
