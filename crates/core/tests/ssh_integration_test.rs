@@ -87,7 +87,7 @@ async fn test_ssh_detect_ip() {
 async fn test_ssh_auth_failure() {
     let client = setup_with_mock_server(3224).await;
     let auth = AuthMethod::Password {
-        password: "wrongpass".into(),
+        password: zeroize::Zeroizing::new("wrongpass".into()),
     };
 
     let result = client.connect(&auth).await;

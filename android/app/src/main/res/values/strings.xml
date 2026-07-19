@@ -1,4 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">TermFast</string>
     <string name="tile_description">快速启停 SSH VPN</string>
+
+    <!-- Common -->
+    <string name="add">添加</string>
+    <string name="edit">编辑</string>
+    <string name="delete">删除</string>
+    <string name="save">保存</string>
+    <string name="cancel">取消</string>
+    <string name="confirm">确定</string>
+    <string name="ok">确定</string>
+    <string name="back">返回</string>
+    <string name="search">搜索</string>
+    <string name="loading">加载中…</string>
+    <string name="empty">暂无数据</string>
+    <string name="refresh">刷新</string>
+    <string name="close">关闭</string>
+    <string name="retry">重试</string>
+    <string name="copy">复制</string>
+    <string name="copied">已复制</string>
+
+    <!-- Server -->
+    <string name="server_add">添加服务器</string>
+    <string name="server_edit">编辑服务器</string>
+    <string name="server_name">服务器名称</string>
+    <string name="server_host">主机地址</string>
+    <string name="server_port">端口</string>
+    <string name="server_user">用户名</string>
+    <string name="server_auth_method">认证方式</string>
+    <string name="server_password">密码</string>
+    <string name="server_key_path">密钥路径</string>
+    <string name="server_key_passphrase">密钥口令</string>
+    <string name="server_skip_hostkey">跳过主机密钥验证</string>
+    <string name="server_connect">连接</string>
+    <string name="server_disconnect">断开</string>
+    <string name="server_connecting">连接中…</string>
+    <string name="server_connected">已连接</string>
+    <string name="server_disconnected">已断开</string>
+    <string name="server_connect_failed">连接失败</string>
+    <string name="server_start_vpn">启动VPN</string>
+    <string name="server_stop_vpn">停止</string>
+
+    <!-- Proxy -->
+    <string name="proxy_enabled">代理已启用</string>
+    <string name="proxy_socks5_port">SOCKS5 端口</string>
+    <string name="proxy_http_port">HTTP 端口</string>
+    <string name="proxy_mixed_port">混合端口</string>
+
+    <!-- Trigger -->
+    <string name="trigger_add">添加触发器</string>
+    <string name="trigger_edit">编辑触发器</string>
+    <string name="trigger_name">触发器名称</string>
+    <string name="trigger_type">触发类型</string>
+    <string name="trigger_commands">命令</string>
+    <string name="trigger_manual_fire">执行</string>
+    <string name="trigger_pause_all">暂停所有</string>
+    <string name="trigger_resume_all">恢复所有</string>
+
+    <!-- Credential -->
+    <string name="cred_section">凭据安全</string>
+    <string name="cred_not_setup">凭据尚未加密。设置主密码后，保存的凭据将受到 AES-256 加密保护。</string>
+    <string name="cred_set_master_password">设置主密码</string>
+    <string name="cred_change_password">修改主密码</string>
+    <string name="cred_export_backup">导出加密备份</string>
+    <string name="cred_import_backup">导入加密备份</string>
+    <string name="cred_forget_password">忘记密码</string>
+    <string name="cred_master_password_set">主密码已设置</string>
+    <string name="cred_password_changed">主密码已修改</string>
+    <string name="cred_setup_failed">设置失败，请重试</string>
+    <string name="cred_change_failed">修改失败，旧密码可能不正确</string>
+    <string name="cred_export_success">导出成功</string>
+    <string name="cred_export_failed">导出失败</string>
+    <string name="cred_import_success">导入成功</string>
+    <string name="cred_import_failed">导入失败</string>
+    <string name="cred_enter_password">输入主密码</string>
+    <string name="cred_unlock">解锁</string>
+    <string name="cred_unlock_failed">解锁失败</string>
+
+    <!-- Settings -->
+    <string name="settings">设置</string>
+    <string name="settings_general">通用</string>
+    <string name="settings_proxy">代理默认值</string>
+    <string name="settings_about">关于</string>
+    <string name="settings_check_update">检查更新</string>
+    <string name="settings_version">版本</string>
+    <string name="settings_notify_connect_success">连接成功</string>
+    <string name="settings_notify_disconnect">断开连接</string>
+    <string name="settings_ipv6">启用 IPv6</string>
+    <string name="settings_kill_switch">Kill Switch</string>
+    <string name="settings_per_app">Per-App 代理</string>
+    <string name="settings_per_app_mode">模式</string>
+    <string name="settings_per_app_whitelist">白名单</string>
+    <string name="settings_per_app_blacklist">黑名单</string>
+
+    <!-- Log -->
+    <string name="log_title">日志</string>
+    <string name="log_clear">清空</string>
+    <string name="log_export">导出</string>
+
+    <!-- Terminal -->
+    <string name="terminal_title">终端</string>
+
+    <!-- Update -->
+    <string name="update_available">发现新版本</string>
+    <string name="update_downloading">正在下载更新…</string>
+    <string name="update_install">安装</string>
+    <string name="update_later">稍后</string>
+    <string name="update_failed">更新失败</string>
+
+    <!-- VPN errors -->
+    <string name="vpn_error_proxy_start">代理启动失败</string>
+    <string name="vpn_error_ssh">SSH 连接失败</string>
+    <string name="vpn_error_auth">认证失败</string>
+    <string name="vpn_kill_switch_active">VPN 异常，Kill switch 已阻止流量</string>
 </resources>

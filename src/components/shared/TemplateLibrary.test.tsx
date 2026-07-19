@@ -15,7 +15,11 @@ vi.mock("@/hooks/useIpc", () => ({
 describe("TemplateLibrary", () => {
   it("renders template library with title", () => {
     render(<TemplateLibrary onClose={vi.fn()} />);
-    expect(screen.getByText(/Template|模板/i)).toBeInTheDocument();
+    // The main title is an h2 heading; section subheadings also exist
+    const headings = screen.getAllByRole("heading");
+    const mainHeading = headings.find((h) => h.tagName === "H2");
+    expect(mainHeading).toBeDefined();
+    expect(mainHeading?.textContent).toMatch(/template|模板/i);
   });
 
   it("has close button", () => {

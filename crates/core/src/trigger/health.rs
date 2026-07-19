@@ -33,13 +33,43 @@ pub enum HealthCheckType {
 /// Health checker for process/port monitoring
 pub struct HealthChecker;
 
+/// Validate a process name for safe inclusion in a shell command.
+/// Only alphanumeric, dash, underscore, dot, and slash are allowed —
+/// matches typical process names (e.g. `nginx`, `sshd`, `my-daemon`).
+/// Rejects shell metacharacters that could enable command injection.
+fn validate_process_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(crate::error::Error::Other(
+            "process name must not be empty".into(),
+        ));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
+    {
+        return Err(crate::error::Error::Other(format!(
+            "process name contains illegal characters: {}",
+            name
+        )));
+    }
+    Ok(())
+}
+
+/// Shell-escape a value by wrapping in single quotes and escaping
+/// embedded single quotes. Used for values that pass through format!
+/// into a remote shell command.
+fn shell_escape(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 impl HealthChecker {
     /// Check if a process is running on the remote server
     pub async fn check_process(
         ssh: &SshClientHandle,
         process_name: &str,
     ) -> Result<HealthCheckResult> {
-        let command = format!("pgrep -x '{}'", process_name);
+        validate_process_name(process_name)?;
+        let command = format!("pgrep -x {}", shell_escape(process_name));
         let result = ssh.exec(&command, 10).await?;
         let alive = result.is_success() && !result.stdout.trim().is_empty();
         Ok(HealthCheckResult {
@@ -58,6 +88,7 @@ impl HealthChecker {
 
     /// Check if a port is open on the remote server
     pub async fn check_port(ssh: &SshClientHandle, port: u16) -> Result<HealthCheckResult> {
+        // port is u16, so it's always a safe numeric value — no injection risk
         let command = format!("ss -tln | grep ':{} ' | grep -v grep", port);
         let result = ssh.exec(&command, 10).await?;
         let alive = result.is_success() && !result.stdout.trim().is_empty();
@@ -158,5 +189,36 @@ mod tests {
         };
         assert_eq!(config.interval_secs, 30);
         assert!(matches!(config.check_type, HealthCheckType::Process(_)));
+    }
+
+    #[test]
+    fn test_validate_process_name_accepts_valid() {
+        assert!(validate_process_name("nginx").is_ok());
+        assert!(validate_process_name("my-daemon").is_ok());
+        assert!(validate_process_name("sshd").is_ok());
+        assert!(validate_process_name("my_app").is_ok());
+        assert!(validate_process_name("app.worker").is_ok());
+        assert!(validate_process_name("/usr/sbin/nginx").is_ok());
+    }
+
+    #[test]
+    fn test_validate_process_name_rejects_injection() {
+        assert!(validate_process_name("").is_err());
+        assert!(validate_process_name("nginx; rm -rf /").is_err());
+        assert!(validate_process_name("nginx`whoami`").is_err());
+        assert!(validate_process_name("nginx$(whoami)").is_err());
+        assert!(validate_process_name("nginx|cat /etc/passwd").is_err());
+        assert!(validate_process_name("nginx&").is_err());
+        assert!(validate_process_name("nginx\nwhoami").is_err());
+        assert!(validate_process_name("nginx' or '1'='1").is_err());
+        assert!(validate_process_name("nginx\"").is_err());
+        // Space is not in the allowed set
+        assert!(validate_process_name("nginx worker").is_err());
+    }
+
+    #[test]
+    fn test_shell_escape_health() {
+        assert_eq!(shell_escape("nginx"), "'nginx'");
+        assert_eq!(shell_escape("it's"), "'it'\\''s'");
     }
 }

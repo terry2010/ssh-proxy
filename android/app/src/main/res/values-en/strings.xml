@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">TermFast</string>
+    <string name="tile_description">Quick SSH VPN toggle</string>
+
+    <!-- Common -->
+    <string name="add">Add</string>
+    <string name="edit">Edit</string>
+    <string name="delete">Delete</string>
+    <string name="save">Save</string>
+    <string name="cancel">Cancel</string>
+    <string name="confirm">Confirm</string>
+    <string name="ok">OK</string>
+    <string name="back">Back</string>
+    <string name="search">Search</string>
+    <string name="loading">Loading…</string>
+    <string name="empty">No data</string>
+    <string name="refresh">Refresh</string>
+    <string name="close">Close</string>
+    <string name="retry">Retry</string>
+    <string name="copy">Copy</string>
+    <string name="copied">Copied</string>
+
+    <!-- Server -->
+    <string name="server_add">Add Server</string>
+    <string name="server_edit">Edit Server</string>
+    <string name="server_name">Server Name</string>
+    <string name="server_host">Host</string>
+    <string name="server_port">Port</string>
+    <string name="server_user">Username</string>
+    <string name="server_auth_method">Auth Method</string>
+    <string name="server_password">Password</string>
+    <string name="server_key_path">Key Path</string>
+    <string name="server_key_passphrase">Key Passphrase</string>
+    <string name="server_skip_hostkey">Skip host key verification</string>
+    <string name="server_connect">Connect</string>
+    <string name="server_disconnect">Disconnect</string>
+    <string name="server_connecting">Connecting…</string>
+    <string name="server_connected">Connected</string>
+    <string name="server_disconnected">Disconnected</string>
+    <string name="server_connect_failed">Connection failed</string>
+    <string name="server_start_vpn">Start VPN</string>
+    <string name="server_stop_vpn">Stop VPN</string>
+
+    <!-- Proxy -->
+    <string name="proxy_enabled">Proxy Enabled</string>
+    <string name="proxy_socks5_port">SOCKS5 Port</string>
+    <string name="proxy_http_port">HTTP Port</string>
+    <string name="proxy_mixed_port">Mixed Port</string>
+
+    <!-- Trigger -->
+    <string name="trigger_add">Add Trigger</string>
+    <string name="trigger_edit">Edit Trigger</string>
+    <string name="trigger_name">Trigger Name</string>
+    <string name="trigger_type">Trigger Type</string>
+    <string name="trigger_commands">Commands</string>
+    <string name="trigger_manual_fire">Fire</string>
+    <string name="trigger_pause_all">Pause All</string>
+    <string name="trigger_resume_all">Resume All</string>
+
+    <!-- Credential -->
+    <string name="cred_section">Credential Security</string>
+    <string name="cred_not_setup">Credentials not encrypted. Set a master password to protect saved credentials with AES-256 encryption.</string>
+    <string name="cred_set_master_password">Set Master Password</string>
+    <string name="cred_change_password">Change Master Password</string>
+    <string name="cred_export_backup">Export Encrypted Backup</string>
+    <string name="cred_import_backup">Import Encrypted Backup</string>
+    <string name="cred_forget_password">Forget Password</string>
+    <string name="cred_master_password_set">Master password set</string>
+    <string name="cred_password_changed">Master password changed</string>
+    <string name="cred_setup_failed">Setup failed, please retry</string>
+    <string name="cred_change_failed">Change failed, old password may be incorrect</string>
+    <string name="cred_export_success">Export succeeded</string>
+    <string name="cred_export_failed">Export failed</string>
+    <string name="cred_import_success">Import succeeded</string>
+    <string name="cred_import_failed">Import failed</string>
+    <string name="cred_enter_password">Enter master password</string>
+    <string name="cred_unlock">Unlock</string>
+    <string name="cred_unlock_failed">Unlock failed</string>
+
+    <!-- Settings -->
+    <string name="settings">Settings</string>
+    <string name="settings_general">General</string>
+    <string name="settings_proxy">Proxy Defaults</string>
+    <string name="settings_about">About</string>
+    <string name="settings_check_update">Check for Updates</string>
+    <string name="settings_version">Version</string>
+    <string name="settings_notify_connect_success">Notify on connect</string>
+    <string name="settings_notify_disconnect">Notify on disconnect</string>
+    <string name="settings_ipv6">Enable IPv6</string>
+    <string name="settings_kill_switch">Kill Switch</string>
+    <string name="settings_per_app">Per-App Proxy</string>
+    <string name="settings_per_app_mode">Mode</string>
+    <string name="settings_per_app_whitelist">Whitelist</string>
+    <string name="settings_per_app_blacklist">Blacklist</string>
+
+    <!-- Log -->
+    <string name="log_title">Logs</string>
+    <string name="log_clear">Clear</string>
+    <string name="log_export">Export</string>
+
+    <!-- Terminal -->
+    <string name="terminal_title">Terminal</string>
+
+    <!-- Update -->
+    <string name="update_available">Update available</string>
+    <string name="update_downloading">Downloading update…</string>
+    <string name="update_install">Install</string>
+    <string name="update_later">Later</string>
+    <string name="update_failed">Update failed</string>
+
+    <!-- VPN errors -->
+    <string name="vpn_error_proxy_start">Proxy start failed</string>
+    <string name="vpn_error_ssh">SSH connection failed</string>
+    <string name="vpn_error_auth">Authentication failed</string>
+    <string name="vpn_kill_switch_active">VPN error, kill switch active</string>
+</resources>

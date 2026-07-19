@@ -112,7 +112,7 @@ async fn handle_list_servers(state: &DaemonState) -> HandlerResult {
     sorted_servers.sort_by_key(|s| {
         config_order
             .iter()
-            .position(|id| id == &s.id())
+            .position(|id| id == s.id())
             .unwrap_or(usize::MAX)
     });
 
@@ -317,7 +317,7 @@ async fn handle_remove_server(state: &DaemonState, params: &serde_json::Value) -
         None,
         LogLevel::Info,
         LogKind::System,
-        format!("Server removed and credentials cleaned up"),
+        "Server removed and credentials cleaned up".to_string(),
     )
     .await;
 

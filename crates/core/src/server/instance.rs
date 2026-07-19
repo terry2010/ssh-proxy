@@ -44,6 +44,7 @@ impl From<ConnectionState> for ServerStatus {
 }
 
 /// A single server instance with all runtime state
+#[allow(clippy::type_complexity)]
 pub struct ServerInstance {
     pub config: ServerConfig,
     pub ssh_client: Arc<SshClientHandle>,
@@ -218,6 +219,7 @@ impl ServerInstance {
     }
 
     /// Set callback for trigger execution results (to broadcast to frontend)
+    #[allow(clippy::type_complexity)]
     pub async fn set_trigger_result_callback(
         &self,
         cb: Arc<
@@ -251,7 +253,7 @@ impl ServerInstance {
                 if let Some(h) = handle {
                     self.channel_opener.set_handle(h.clone()).await;
                     // Detect client IP from SSH connection (§5.2)
-                    match crate::ssh::exec::detect_client_ip(&*h).await {
+                    match crate::ssh::exec::detect_client_ip(&h).await {
                         Ok(ip) => {
                             tracing::debug!("detected client ip {} for {}", ip, self.config.name);
                             *self.client_ip.lock().await = Some(ip);

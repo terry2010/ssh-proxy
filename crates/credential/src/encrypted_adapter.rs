@@ -3,12 +3,12 @@
 //!
 //! Workflow:
 //! 1. `EncryptedCredentialStore::open(path)` — opens the file (may not exist).
-//! 2a. If file absent: store starts in **pending** mode — credentials are held
-//!     in memory only, not persisted. `save`/`load`/`delete` work on the
-//!     in-memory map. When `initialize()` is called, the pending map is
-//!     flushed to the encrypted file.
-//! 2b. If file exists: `unlock(master_password)` — derives key, decrypts file,
-//!     caches map.
+//! 2. If file absent: store starts in **pending** mode — credentials are held
+//!    in memory only, not persisted. `save`/`load`/`delete` work on the
+//!    in-memory map. When `initialize()` is called, the pending map is
+//!    flushed to the encrypted file.
+//!    If file exists: `unlock(master_password)` — derives key, decrypts file,
+//!    caches map.
 //! 3. `CredentialStore` trait ops — read/write in-memory map, re-encrypt file on writes.
 //! 4. `lock()` — clears cached key + map.
 //! 5. `flush()` — explicit write (normally auto on save/delete).
@@ -227,7 +227,7 @@ impl EncryptedFileCredentialStore {
         let _plaintext = super::encrypted::decrypt_with_key_pub(&key, &header, &data[super::encrypted::HEADER_LEN..])
             .context("wrong master password or corrupted import file")?;
         // Password verified — safe to overwrite.
-        super::encrypted::write_atomic_pub(&self.store.path(), &data)?;
+        super::encrypted::write_atomic_pub(self.store.path(), &data)?;
         self.store.set_sync_version(header.sync_version);
         // Unlock with the imported file.
         self.unlock(master_password)?;

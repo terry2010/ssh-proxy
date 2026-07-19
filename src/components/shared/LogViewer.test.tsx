@@ -14,8 +14,11 @@ describe("LogViewer", () => {
     expect(screen.getByText(/Logs|日志/i)).toBeInTheDocument();
   });
 
-  it("has close button (×)", () => {
+  it("has close button", () => {
     render(<LogViewer onClose={vi.fn()} />);
-    expect(screen.getByText("×")).toBeInTheDocument();
+    // Close button is an SVG icon (X shape) inside a <button>
+    const buttons = screen.getAllByRole("button");
+    const closeBtn = buttons.find((b) => b.querySelector("svg"));
+    expect(closeBtn).toBeDefined();
   });
 });

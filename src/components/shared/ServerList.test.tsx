@@ -51,9 +51,12 @@ describe("ServerList", () => {
       servers: [mockServer("s1", "Test VPS")],
       selected_server_id: null,
     });
+    // Port chip only renders when proxy is running
+    useServerStore.setState((s) => ({
+      servers: s.servers.map((srv) => srv.id === "s1" ? { ...srv, proxy_running: true } : srv),
+    }));
     render(<ServerList />);
-    await waitFor(() => expect(screen.getByText(":1080")).toBeInTheDocument());
-    expect(screen.getByText(":1080")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/:1080/)).toBeInTheDocument());
   });
 
   it("calls selectServer when clicking a server", async () => {
