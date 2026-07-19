@@ -173,7 +173,7 @@ jobs:
 
       - name: Build release APK
         working-directory: android
-        run: ./gradlew :app:assembleRelease --no-daemon
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
 
       - name: Rename APK with version
         run: |
@@ -193,8 +193,8 @@ jobs:
 
   # === Generate latest.json from the signed release assets and deploy to gh-pages ===
   update-manifest:
-    needs: [build]
-    if: always() && !cancelled()
+    needs: [build, build-android]
+    if: success()
     permissions:
       contents: write
     runs-on: ubuntu-latest
