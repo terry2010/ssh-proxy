@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -32,10 +34,11 @@ android {
             storeFile = file("keystores/release.keystore")
             // Read signing passwords from local.properties (gitignored) or
             // environment variables. Falls back to dev default for local builds.
-            val localProps = java.util.Properties()
-            val localPropsFile = rootProject.file("local.properties")
-            if (localPropsFile.exists()) {
-                localProps.load(localPropsFile.inputStream())
+            val localProps = Properties().also { props ->
+                val localPropsFile = rootProject.file("local.properties")
+                if (localPropsFile.exists()) {
+                    props.load(localPropsFile.inputStream())
+                }
             }
             storePassword = localProps.getProperty("TERMFAST_STORE_PASSWORD")
                 ?: System.getenv("TERMFAST_STORE_PASSWORD")
