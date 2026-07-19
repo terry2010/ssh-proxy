@@ -27,17 +27,9 @@ $DROPBOX_APP_SECRET = getenv('DROPBOX_APP_SECRET') ?: '';
 $BAIDU_APP_KEY      = getenv('BAIDU_APP_KEY') ?: '';
 $BAIDU_APP_SECRET   = getenv('BAIDU_APP_SECRET') ?: '';
 
-// === 安全：CORS — 只允许 Tauri webview origin 调用 ===
-$ALLOWED_ORIGIN = 'https://tauri.localhost'; // Tauri webview origin
-header("Access-Control-Allow-Origin: $ALLOWED_ORIGIN");
-header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type');
-
-// Handle CORS preflight
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(204);
-    exit;
-}
+// CORS: not needed — HTTP calls come from Rust reqwest (not browser fetch),
+// so CORS does not apply. The webview never calls this server directly;
+// all requests go through Tauri IPC → Rust reqwest → here.
 
 // === 路由 ===
 header('Content-Type: application/json; charset=utf-8');
