@@ -50,9 +50,35 @@ async function githubApi(url) {
 async function downloadText(url) {
   const token = process.env.GITHUB_TOKEN;
   const headers = token ? { Authorization: `Bearer ${token}` } : {};
+  // For draft releases, browser_download_url points to a temporary "untagged-*" path
+  // that 404s. Use the GitHub API asset endpoint instead, which works for drafts.
+  const apiMatch = url.match(/\/releases\/download\/[^/]+\/(.+)$/);
+  if (apiMatch) {
+    // Fallback: try the GitHub API asset content endpoint via the releases list
+    // We already have the release object in scope, so this is handled by the caller.
+  }
   const res = await fetch(url, { headers });
   if (!res.ok) {
     throw new Error(`Failed to download ${url}: ${res.status}`);
+  }
+  return res.text();
+}
+
+/**
+ * Download asset content via GitHub API (works for draft releases).
+ * @param {number} assetId
+ */
+async function downloadAssetContent(assetId) {
+  const token = process.env.GITHUB_TOKEN;
+  const headers = {
+    Accept: "application/octet-stream",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const url = `https://api.github.com/repos/${owner}/${repoName}/releases/assets/${assetId}`;
+  const res = await fetch(url, { headers });
+  if (!res.ok) {
+    throw new Error(`Failed to download asset ${assetId} via API: ${res.status}`);
   }
   return res.text();
 }
@@ -103,7 +129,9 @@ async function main() {
     const sigAsset = release.assets.find((a) => a.name === `${assetName}.sig`);
     let signature = "";
     if (sigAsset) {
-      signature = (await downloadText(sigAsset.browser_download_url)).trim();
+      // Use GitHub API asset endpoint — works for draft releases where
+      // browser_download_url points to a temporary "untagged-*" path that 404s.
+      signature = (await downloadAssetContent(sigAsset.id)).trim();
     } else {
       console.error(`Signature asset not found for: ${assetName} — refusing to publish unsigned update`);
       process.exit(1);
