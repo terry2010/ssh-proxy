@@ -22,6 +22,7 @@ import com.termfast.app.data.ServerConfig
 import com.termfast.app.data.SshConfig
 import com.termfast.app.data.ProxyConfig
 import com.termfast.app.data.IpCheckConfig
+import com.termfast.app.data.CredentialManager
 import com.termfast.app.service.SshVpnService
 import java.util.UUID
 
@@ -50,6 +51,14 @@ fun ServerEditScreen(navController: NavController, serverId: String?) {
     LaunchedEffect(serverId) {
         if (serverId != null) {
             loading = true
+            // Wait for credential store to be unlocked before loading creds.
+            // tryCachedUnlock runs async in MainActivity.onCreate; if the user
+            // opens edit screen quickly, the store may still be locked.
+            val deadline = System.currentTimeMillis() + 3000
+            while (System.currentTimeMillis() < deadline) {
+                if (CredentialManager.isUnlocked()) break
+                kotlinx.coroutines.delay(50)
+            }
             val servers = repo.listServers()
             val s = servers.find { it.id == serverId }
             if (s != null) {

@@ -16,6 +16,7 @@ import androidx.core.app.ServiceCompat
 import com.termfast.app.MainActivity
 import com.termfast.app.RustBridge
 import com.termfast.app.data.AppSettings
+import com.termfast.app.data.CredentialManager
 
 class SshVpnService : VpnService() {
 
@@ -200,6 +201,16 @@ class SshVpnService : VpnService() {
         perAppMode: String,
         perAppPackages: Array<String>
     ) {
+        // Wait for credential store to be unlocked before connecting.
+        // tryCachedUnlock runs async in MainActivity.onCreate; if the user
+        // taps "connect" quickly, the Argon2id key derivation may not have
+        // finished yet, causing loadCredential() to return null → "未保存密码".
+        val deadline = System.currentTimeMillis() + 3000
+        while (System.currentTimeMillis() < deadline) {
+            if (CredentialManager.isUnlocked()) break
+            Thread.sleep(50)
+        }
+
         // Ensure SSH is connected and proxy is running before bringing up the TUN
         if (serverId.isEmpty()) {
             Log.e(TAG, "No server id provided")
