@@ -2771,16 +2771,25 @@ async fn handle_terminal_input(state: &DaemonState, params: &serde_json::Value) 
         .get("data")
         .and_then(|v| v.as_str())
         .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing data"))?;
+    // wait_for_send=true blocks until SSH write is confirmed (needed for ZMODEM
+    // backpressure). Default false — normal keystrokes return immediately.
+    let wait_for_send = params
+        .get("wait_for_send")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
-    tracing::info!(
-        "handle_terminal_input: session_id={} data_len={}",
-        session_id,
-        data.len(),
-    );
+    if data.len() <= 64 {
+        tracing::info!(
+            "handle_terminal_input: session_id={} data_len={} wait_for_send={}",
+            session_id,
+            data.len(),
+            wait_for_send,
+        );
+    }
 
     state
         .terminal_manager
-        .input(session_id, data)
+        .input_with_ack(session_id, data, wait_for_send)
         .await
         .map_err(|e| IpcError::new(ErrorCode::Internal, e))?;
 

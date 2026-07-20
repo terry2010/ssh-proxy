@@ -346,12 +346,14 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
     }).catch(() => {});
 
     // Helper: send raw bytes to backend (base64-encoded for binary safety).
-    // Returns a promise that resolves when the daemon has confirmed the bytes
-    // were sent over SSH — this provides backpressure for large ZMODEM uploads.
-    const sendToBackend = (bytes: Uint8Array | number[]): Promise<void> => {
+    // For ZMODEM uploads, wait_for_send=true provides backpressure by blocking
+    // until SSH write is confirmed. For normal keystrokes, wait_for_send is
+    // omitted (defaults to false) so typing stays responsive.
+    const sendToBackend = (bytes: Uint8Array | number[], waitForSend = false): Promise<void> => {
       return ipcInvoke("ipc_terminal_input", {
         session_id: sessionIdRef.current,
         data: bytesToBase64(bytes),
+        wait_for_send: waitForSend,
       }).then(() => {}).catch(() => {});
     };
 
@@ -783,7 +785,7 @@ export function TerminalView({ sessionId, serverId, active, initialOutput }: Ter
         // zmodem.js-ex calls sender synchronously, so we can't await here,
         // but the upload loop awaits lastSenderPromise before sending the
         // next chunk.
-        lastSenderPromise = sendToBackend(octets);
+        lastSenderPromise = sendToBackend(octets, true);
       },
       on_detect: (detection: ZmodemDetection) => {
         // Cooldown: after a session ends, ignore spurious detections from

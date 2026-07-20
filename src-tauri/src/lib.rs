@@ -259,10 +259,17 @@ async fn forward_to_daemon(
 ) -> Result<serde_json::Value, String> {
     // Daemon may not be ready yet (async startup) — retry briefly
     for _attempt in 0..20 {
-        let guard = state.daemon.lock().await;
-        if let Some(ref daemon) = *guard {
+        // Clone the Arc<DaemonState> and release the lock BEFORE calling
+        // handle_request.  Holding the lock during handle_request serializes
+        // all IPC calls — a slow request (e.g. terminal input waiting for SSH
+        // write ack) blocks every subsequent request, causing the UI to hang.
+        let daemon_state = {
+            let guard = state.daemon.lock().await;
+            guard.as_ref().map(|d| d.server.state().clone())
+        };
+        if let Some(ds) = daemon_state {
             let req = termfast_daemon::proto::Request::new(action, params);
-            let resp = termfast_daemon::handler::handle_request(&req, daemon.server.state()).await;
+            let resp = termfast_daemon::handler::handle_request(&req, &ds).await;
             match resp {
                 termfast_daemon::proto::Response::Ok { data, .. } => return Ok(data),
                 termfast_daemon::proto::Response::Err { error, .. } => {
@@ -276,7 +283,6 @@ async fn forward_to_daemon(
                 }
             }
         }
-        drop(guard);
         // Daemon not ready yet, wait and retry
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
@@ -1117,10 +1123,12 @@ async fn ipc_terminal_input(
     state: tauri::State<'_, AppState>,
     session_id: String,
     data: String,
+    wait_for_send: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     let params = serde_json::json!({
         "session_id": session_id,
         "data": data,
+        "wait_for_send": wait_for_send.unwrap_or(false),
     });
     forward_to_daemon(
         &state,
