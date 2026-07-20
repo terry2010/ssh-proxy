@@ -55,6 +55,8 @@ object TerminalSessionManager {
         val createdAt: Long = System.currentTimeMillis(),
         val name: String = "",
         val lastLineComplete: Boolean = true,
+        val cursorCol: Int = 0,
+        val pendingCr: Boolean = false,
     )
 
     @Synchronized
@@ -78,6 +80,11 @@ object TerminalSessionManager {
     }
 
     @Synchronized
+    fun getCursorColBySession(sessionId: String): Int {
+        return sessions[sessionId]?.cursorCol ?: 0
+    }
+
+    @Synchronized
     fun updateOutputBySession(sessionId: String, output: List<String>) {
         val existing = sessions[sessionId] ?: return
         sessions[sessionId] = existing.copy(output = output)
@@ -85,64 +92,168 @@ object TerminalSessionManager {
 
     /**
      * Append raw terminal data, correctly merging partial lines across chunks.
-     * Terminal data arrives in arbitrary chunks — a prompt may come without
-     * a trailing newline, then the echoed input arrives separately. We track
-     * whether the last line is "complete" (ended with \n) and merge accordingly.
+     * Terminal data arrives in arbitrary chunks. We process it with a
+     *   simple terminal emulator that handles:
+     *   - \n  : newline (start a new line)
+     *   - \r  : carriage return (move cursor to start of current line)
+     *   - \b  : backspace (move cursor left one column)
+     *   - \u007f (DEL): ignored in output stream
+     *   - ANSI cursor movement: \u001b[D (left), \u001b[C (right),
+     *     \u001b[<n>G (go to column n, 1-based), \u001b[<n>D/C (move n)
+     *   - ANSI line erase: \u001b[K (erase to end of line)
+     *   - Other ANSI escape codes: stripped
      */
     @Synchronized
     fun appendTerminalData(sessionId: String, raw: String) {
         val existing = sessions[sessionId] ?: return
-        // Strip ANSI codes, drop \r. Then process backspace (\u0008) and
-        //   DEL (\u007f) by removing the previous character — this mirrors
-        //   what a real terminal does when the server echoes the erase
-        //   sequence (\b \b or \b) for canonical-mode line editing.
-        val stripped = stripAnsi(raw).replace("\r", "").replace("\u007f", "")
-        if (stripped.isEmpty()) return
+        if (raw.isEmpty()) return
 
-        // Build the new lines, applying backspace to the current last line
-        //   when the chunk starts mid-line.
-        val endsWithNl = stripped.endsWith("\n")
-        val rawLines = if (endsWithNl) stripped.split("\n").dropLast(1) else stripped.split("\n")
-
-        // Merge first new line with existing partial last line, then apply
-        //   backspace processing across the merged content.
-        val (firstLine, restLines) = if (!existing.lastLineComplete && existing.output.isNotEmpty() && rawLines.isNotEmpty()) {
-            val merged0 = existing.output.last() + rawLines.first()
-            merged0 to rawLines.drop(1)
-        } else if (rawLines.isNotEmpty()) {
-            rawLines.first() to rawLines.drop(1)
+        // Work on a mutable copy of the existing output lines. The "current
+        //   line" is the last element; we track a cursor column within it.
+        val lines = existing.output.toMutableList()
+        var cursorCol = if (!existing.lastLineComplete && lines.isNotEmpty()) {
+            // Resume from saved cursor position (may be mid-line after \b moves).
+            existing.cursorCol
         } else {
-            "" to emptyList()
+            if (lines.isEmpty() || existing.lastLineComplete) lines.add("")
+            0
+        }
+        var pendingCr = existing.pendingCr
+
+        // Parse the raw string, handling ANSI cursor sequences inline and
+        //   stripping other ANSI codes. We scan char by char; when we hit
+        //   \u001b, we parse the full CSI sequence and apply cursor ops.
+        var i = 0
+        while (i < raw.length) {
+            val ch = raw[i]
+            when {
+                ch == '\u001b' -> {
+                    // ANSI escape sequence — parse and handle cursor movement.
+                    val (consumed, op) = parseAnsiCursor(raw, i)
+                    when (op) {
+                        is CursorOp.Left -> {
+                            cursorCol = maxOf(0, cursorCol - op.n)
+                            pendingCr = false
+                        }
+                        is CursorOp.Right -> {
+                            val lineLen = lines.lastOrNull()?.length ?: 0
+                            cursorCol = minOf(lineLen, cursorCol + op.n)
+                            pendingCr = false
+                        }
+                        is CursorOp.ToCol -> {
+                            cursorCol = maxOf(0, op.col)
+                            pendingCr = false
+                        }
+                        is CursorOp.EraseToEnd -> {
+                            // Erase from cursor to end of line.
+                            if (lines.isNotEmpty() && cursorCol < lines.last().length) {
+                                lines[lines.lastIndex] = lines.last().substring(0, cursorCol)
+                            }
+                            pendingCr = false
+                        }
+                        null -> { /* stripped, no-op */ }
+                    }
+                    i += consumed
+                }
+                ch == '\n' -> {
+                    cursorCol = 0
+                    pendingCr = false
+                    lines.add("")
+                    i++
+                }
+                ch == '\r' -> {
+                    cursorCol = 0
+                    pendingCr = true
+                    i++
+                }
+                ch == '\u0008' -> {
+                    if (cursorCol > 0) cursorCol--
+                    pendingCr = false
+                    i++
+                }
+                ch == '\u007f' -> {
+                    // DEL — ignored in output stream.
+                    i++
+                }
+                else -> {
+                    // Printable character.
+                    if (pendingCr && cursorCol == 0 && lines.isNotEmpty()) {
+                        lines[lines.lastIndex] = ""
+                        pendingCr = false
+                    }
+                    val cur = lines.lastOrNull() ?: run { lines.add(""); "" }
+                    if (cursorCol < cur.length) {
+                        lines[lines.lastIndex] = cur.substring(0, cursorCol) + ch + cur.substring(cursorCol + 1)
+                    } else {
+                        lines[lines.lastIndex] = cur + ch
+                    }
+                    cursorCol++
+                    i++
+                }
+            }
         }
 
-        val processedFirst = applyBackspace(firstLine)
-        val processedRest = restLines.map { applyBackspace(it) }
+        val endsWithNl = raw.endsWith("\n")
+        sessions[sessionId] = existing.copy(
+            output = lines,
+            lastLineComplete = endsWithNl,
+            cursorCol = cursorCol,
+            pendingCr = pendingCr,
+        )
+    }
 
-        // Rebuild output: keep all but last existing line, then add processed lines.
-        val baseOutput = if (!existing.lastLineComplete && existing.output.isNotEmpty()) {
-            existing.output.dropLast(1)
-        } else {
-            existing.output
-        }
-        val merged = baseOutput + listOf(processedFirst) + processedRest
-        sessions[sessionId] = existing.copy(output = merged, lastLineComplete = endsWithNl)
+    /** Result of parsing an ANSI escape sequence at position [i]. */
+    private sealed class CursorOp {
+        data class Left(val n: Int) : CursorOp()
+        data class Right(val n: Int) : CursorOp()
+        data class ToCol(val col: Int) : CursorOp()
+        object EraseToEnd : CursorOp()
     }
 
     /**
-     * Process backspace (\u0008) in a single line: each \b removes the
-     *   preceding character. This handles the server's echo of canonical-mode
-     *   line editing (e.g. `\b \b` for backspace).
+     * Parse an ANSI escape sequence starting at [i] in [raw].
+     * Returns (charsConsumed, CursorOp?) — op is null for non-cursor sequences
+     *   (colors, OSC, etc.) which should just be stripped.
      */
-    private fun applyBackspace(line: String): String {
-        val sb = StringBuilder()
-        for (ch in line) {
-            when (ch) {
-                '\u0008' -> { if (sb.isNotEmpty()) sb.deleteCharAt(sb.length - 1) }
-                else -> sb.append(ch)
+    private fun parseAnsiCursor(raw: String, i: Int): Pair<Int, CursorOp?> {
+        // Need at least \u001b + one more char.
+        if (i + 1 >= raw.length) return Pair(1, null)
+        val next = raw[i + 1]
+        if (next == '[') {
+            // CSI sequence: \u001b[<params><letter>
+            var j = i + 2
+            val paramStart = j
+            while (j < raw.length && (raw[j].isDigit() || raw[j] == ';' || raw[j] == '?')) j++
+            if (j >= raw.length) return Pair(raw.length - i, null)
+            val paramStr = raw.substring(paramStart, j)
+            val letter = raw[j]
+            val consumed = j - i + 1
+            val n = paramStr.toIntOrNull() ?: 1
+            return when (letter) {
+                'D' -> Pair(consumed, CursorOp.Left(n))      // cursor left
+                'C' -> Pair(consumed, CursorOp.Right(n))     // cursor right
+                'G' -> Pair(consumed, CursorOp.ToCol(n - 1)) // cursor to column (1-based)
+                'K' -> {
+                    // Erase in line: 0K = cursor to end, 1K = start to cursor, 2K = whole line
+                    val mode = paramStr.toIntOrNull() ?: 0
+                    if (mode == 0) Pair(consumed, CursorOp.EraseToEnd) else Pair(consumed, null)
+                }
+                else -> Pair(consumed, null) // other CSI: strip
             }
         }
-        return sb.toString()
+        // OSC or other 2-char ESC — strip (simplified: skip to BEL or ST or just 2 chars)
+        if (next == ']') {
+            var j = i + 2
+            while (j < raw.length && raw[j] != '\u0007' && raw[j] != '\u001b') j++
+            if (j < raw.length && raw[j] == '\u0007') return Pair(j - i + 1, null)
+            if (j < raw.length && raw[j] == '\u001b' && j + 1 < raw.length && raw[j + 1] == '\\') return Pair(j - i + 2, null)
+            return Pair(raw.length - i, null)
+        }
+        // Other 2-char ESC sequence
+        return Pair(2, null)
     }
+
+
 
     @Synchronized
     fun isConnectedBySession(sessionId: String): Boolean {

@@ -6,10 +6,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -96,6 +98,7 @@ fun TerminalScreen(navController: NavController, serverId: String, existingSessi
 
     // Terminal output lines — restore from cache if available
     var outputLines by remember(sessionId) { mutableStateOf(TerminalSessionManager.getOutputBySession(sessionId)) }
+    var cursorCol by remember(sessionId) { mutableStateOf(TerminalSessionManager.getCursorColBySession(sessionId)) }
     var connected by remember(sessionId) {
         val s = TerminalSessionManager.getSessions(serverId).firstOrNull { it.sessionId == sessionId }
         mutableStateOf(s?.connected ?: false)
@@ -111,6 +114,7 @@ fun TerminalScreen(navController: NavController, serverId: String, existingSessi
                     if (event.session_id == sessionId) {
                         // Global collector already processes data; just read updated state
                         outputLines = TerminalSessionManager.getOutputBySession(sessionId)
+                        cursorCol = TerminalSessionManager.getCursorColBySession(sessionId)
                         if (outputLines.isNotEmpty()) {
                             listState.animateScrollToItem(outputLines.size - 1)
                         }
@@ -264,18 +268,28 @@ fun TerminalScreen(navController: NavController, serverId: String, existingSessi
                     )
                 }
             } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    items(outputLines) { line ->
-                        Text(
-                            line,
-                            color = terminalFg,
-                            fontSize = 13.sp,
-                            lineHeight = 18.sp,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                SelectionContainer {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        itemsIndexed(outputLines) { index, line ->
+                            val isLast = index == outputLines.lastIndex
+                            // Append \n to non-last lines so copy preserves
+                            //   line breaks across the selection.
+                            val text = if (isLast) line else line + "\n"
+                            if (isLast && connected) {
+                                TerminalLineWithCursor(text, terminalFg, cursorCol)
+                            } else {
+                                Text(
+                                    text,
+                                    color = terminalFg,
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -433,18 +447,28 @@ fun TerminalScreen(navController: NavController, serverId: String, existingSessi
                     )
                 }
             } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    items(outputLines) { line ->
-                        Text(
-                            line,
-                            color = terminalFg,
-                            fontSize = 13.sp,
-                            lineHeight = 18.sp,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                SelectionContainer {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        itemsIndexed(outputLines) { index, line ->
+                            val isLast = index == outputLines.lastIndex
+                            // Append \n to non-last lines so copy preserves
+                            //   line breaks across the selection.
+                            val text = if (isLast) line else line + "\n"
+                            if (isLast && connected) {
+                                TerminalLineWithCursor(text, terminalFg, cursorCol)
+                            } else {
+                                Text(
+                                    text,
+                                    color = terminalFg,
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -715,6 +739,43 @@ fun TerminalScreen(navController: NavController, serverId: String, existingSessi
             dismissButton = {
                 TextButton(onClick = { showDeleteDialog = false }) { Text("取消") }
             },
+        )
+    }
+}
+
+// === SECTION 1: Terminal line with blinking cursor ===
+
+@Composable
+private fun TerminalLineWithCursor(line: String, terminalFg: Color, cursorCol: Int) {
+    var cursorVisible by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            cursorVisible = !cursorVisible
+            kotlinx.coroutines.delay(530)
+        }
+    }
+    // Split the line at cursorCol and insert a blinking block cursor.
+    //   line may have a trailing "\n" (added for copy); keep it after cursor.
+    val before = line.take(cursorCol)
+    val after = line.drop(cursorCol)
+    Row(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            before,
+            color = terminalFg,
+            fontSize = 13.sp,
+            lineHeight = 18.sp,
+        )
+        Text(
+            "▋",
+            color = if (cursorVisible) terminalFg else Color.Transparent,
+            fontSize = 13.sp,
+            lineHeight = 18.sp,
+        )
+        Text(
+            after,
+            color = terminalFg,
+            fontSize = 13.sp,
+            lineHeight = 18.sp,
         )
     }
 }

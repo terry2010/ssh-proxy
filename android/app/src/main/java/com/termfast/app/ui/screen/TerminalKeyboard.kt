@@ -177,9 +177,12 @@ fun TerminalKeyboard(
                                 pressedPos = foundPos
                             }
                         } else {
-                            // Finger released — send key at release position
+                            // Finger released — send key at release position.
+                            //   Only fire once per press: guard with pressedPos
+                            //   so duplicate release events don't re-send.
+                            val wasPressed = pressedPos
                             pressedPos = null
-                            if (foundPos != null && currentEnabled) {
+                            if (foundPos != null && wasPressed != null && currentEnabled) {
                                 val key = allRows[foundPos.first].getOrNull(foundPos.second)
                                 if (key != null) {
                                     handleKeyRelease(
