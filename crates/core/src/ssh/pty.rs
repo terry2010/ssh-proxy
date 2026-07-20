@@ -40,16 +40,21 @@ pub async fn open_pty_shell(
 
     let term = "xterm-256color";
 
-    // Configure terminal modes for binary-safe PTY operation.
-    // These settings ensure ZMODEM (rz/sz) binary data passes through
-    // without corruption from PTY line discipline processing.
+    // Configure terminal modes for interactive PTY operation.
+    // ZMODEM (rz/sz) programs set raw mode themselves on startup, so these
+    // initial values only affect the shell — they don't interfere with ZMODEM.
     use russh::Pty;
     let terminal_modes: Vec<(Pty, u32)> = vec![
-        // Input modes — prevent PTY from eating or modifying binary data
+        // Input modes
         (Pty::ISTRIP, 0), // Don't strip 8th bit — preserve binary data
         (Pty::IXON, 0),   // Disable XON/XOFF output flow control (would eat 0x13)
         (Pty::IXOFF, 0),  // Disable XON/XOFF input flow control (would eat 0x11)
-        (Pty::ICRNL, 0),  // Don't translate CR to NL on input
+        (Pty::ICRNL, 1),  // Translate CR to NL on input — standard terminal
+                          // behavior. xterm.js sends \r on Enter; without this
+                          // translation, programs that read until \n (e.g. sudo's
+                          // getpass()) hang forever because \r is never converted
+                          // to \n. ZMODEM programs set raw mode (ICRNL=0) on
+                          // startup, so this doesn't affect binary transfers.
         (Pty::INLCR, 0),  // Don't translate NL to CR on input
         (Pty::IGNCR, 0),  // Don't discard CR on input
         // Control modes

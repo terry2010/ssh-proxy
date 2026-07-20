@@ -61,18 +61,14 @@ impl TerminalManager {
 
         let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<TerminalCmd>();
 
-        let (channel, first_output) = try_open_pty_or_fallback(ssh_handle, cols, rows)
+        let (mut channel, first_output) = try_open_pty_or_fallback(ssh_handle, cols, rows)
             .await
             .map_err(|e| format!("failed to open terminal: {}", e))?;
 
-        // Split the channel into independent read/write halves so input and output
-        // can run concurrently without lock contention.
-        let (mut read_half, write_half) = channel.split();
-
-        // Read initial shell output (MOTD/prompt) before starting the read
+        // Read initial shell output (MOTD/prompt) before starting the main
         // task. This output is returned to the caller via the IPC response so
         // the frontend can write it directly to the terminal — avoiding a
-        // race condition where the read_task emits "terminal:output" events
+        // race condition where the task emits "terminal:output" events
         // before the frontend has registered its event listener.
         let mut initial_output_bytes = first_output.clone();
         if !initial_output_bytes.is_empty() {
@@ -89,7 +85,7 @@ impl TerminalManager {
                 break;
             }
             let remaining = collect_deadline - now;
-            match tokio::time::timeout(remaining, read_half.wait()).await {
+            match tokio::time::timeout(remaining, channel.wait()).await {
                 Ok(Some(ChannelMsg::Data { ref data })) => {
                     initial_output_bytes.extend_from_slice(data);
                 }
@@ -123,40 +119,37 @@ impl TerminalManager {
             );
         }
 
-        let read_sid = sid.clone();
-        let read_fwd = fwd.clone();
-        let read_task = tokio::spawn(async move {
-            tracing::info!("terminal read task started for {}", read_sid);
+        let task_sid = sid.clone();
+        let task_fwd = fwd.clone();
+        let main_task = tokio::spawn(async move {
+            tracing::info!("terminal main task started for {}", task_sid);
             // Buffer for merging small Data packets within a short time window.
-            // This reduces the number of emit events (and base64 encode calls)
-            // when the server outputs many small chunks in rapid succession.
             let mut data_buf: Vec<u8> = Vec::new();
             let mut stderr_buf: Vec<u8> = Vec::new();
             let mut has_pending: bool = false;
 
-            // Helper closure to flush pending buffers
             macro_rules! flush_buffers {
                 () => {{
                     if !data_buf.is_empty() {
                         let output = base64::engine::general_purpose::STANDARD.encode(&data_buf);
-                        tracing::trace!(
-                            "terminal data len={} (base64={}) for session {}",
+                        tracing::info!(
+                            "terminal flush data len={} (base64={}) for session {}",
                             data_buf.len(),
                             output.len(),
-                            read_sid
+                            task_sid
                         );
-                        forward_terminal_output(&read_fwd, &read_sid, &output, false);
+                        forward_terminal_output(&task_fwd, &task_sid, &output, false);
                         data_buf.clear();
                     }
                     if !stderr_buf.is_empty() {
                         let output = base64::engine::general_purpose::STANDARD.encode(&stderr_buf);
-                        tracing::trace!(
-                            "terminal ext data len={} (base64={}) for session {}",
+                        tracing::info!(
+                            "terminal flush ext data len={} (base64={}) for session {}",
                             stderr_buf.len(),
                             output.len(),
-                            read_sid
+                            task_sid
                         );
-                        forward_terminal_output(&read_fwd, &read_sid, &output, true);
+                        forward_terminal_output(&task_fwd, &task_sid, &output, true);
                         stderr_buf.clear();
                     }
                     has_pending = false;
@@ -165,154 +158,241 @@ impl TerminalManager {
             }
 
             loop {
-                // If we have pending data, race a flush timer against the next
-                // channel message. This batches small Data packets within a 5ms
-                // window to reduce emit events and base64 encode calls.
-                let flush_delay_ms = if has_pending { 5u64 } else { u64::MAX };
-
-                tokio::select! {
-                    biased; // Check timer first so we flush before processing new data
-                    _ = tokio::time::sleep(std::time::Duration::from_millis(flush_delay_ms)) => {
-                        flush_buffers!();
-                    }
-                    msg = read_half.wait() => {
-                        match msg {
-                            Some(ChannelMsg::Data { ref data }) => {
-                                data_buf.extend_from_slice(data);
-                                has_pending = true;
-                            }
-                            Some(ChannelMsg::ExtendedData { ref data, .. }) => {
-                                stderr_buf.extend_from_slice(data);
-                                has_pending = true;
-                            }
-                            Some(ChannelMsg::Success) => {
-                                tracing::debug!("terminal Success for session {}", read_sid);
-                            }
-                            Some(ChannelMsg::Failure) => {
-                                tracing::warn!("terminal Failure for session {}", read_sid);
-                            }
-                            Some(ChannelMsg::ExitStatus { exit_status }) => {
-                                flush_buffers!();
-                                tracing::info!("terminal exit_status={} for session {}", exit_status, read_sid);
-                            }
-                            Some(ChannelMsg::Eof) => {
-                                flush_buffers!();
-                                tracing::info!("terminal EOF for session {}", read_sid);
-                            }
-                            Some(ChannelMsg::Close) => {
-                                flush_buffers!();
-                                tracing::info!("terminal Close for session {}", read_sid);
-                                forward_terminal_closed(&read_fwd, &read_sid);
-                                break;
-                            }
-                            None => {
-                                flush_buffers!();
-                                tracing::info!("terminal channel None for session {}", read_sid);
-                                forward_terminal_closed(&read_fwd, &read_sid);
-                                break;
-                            }
-                            Some(other) => {
-                                tracing::debug!("terminal other msg: {:?} for session {}", other, read_sid);
+                if has_pending {
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(5)) => {
+                            flush_buffers!();
+                        }
+                        msg = channel.wait() => {
+                            match msg {
+                                Some(ChannelMsg::Data { ref data }) => {
+                                    tracing::info!("terminal read Data len={} for session {}", data.len(), task_sid);
+                                    data_buf.extend_from_slice(data);
+                                }
+                                Some(ChannelMsg::ExtendedData { ref data, .. }) => {
+                                    tracing::info!("terminal read ExtendedData len={} for session {}", data.len(), task_sid);
+                                    stderr_buf.extend_from_slice(data);
+                                }
+                                Some(ChannelMsg::ExitStatus { exit_status }) => {
+                                    flush_buffers!();
+                                    tracing::info!("terminal exit_status={} for session {}", exit_status, task_sid);
+                                }
+                                Some(ChannelMsg::Eof) => {
+                                    flush_buffers!();
+                                    tracing::info!("terminal EOF for session {}", task_sid);
+                                }
+                                Some(ChannelMsg::Close) => {
+                                    flush_buffers!();
+                                    tracing::info!("terminal Close for session {}", task_sid);
+                                    forward_terminal_closed(&task_fwd, &task_sid);
+                                    break;
+                                }
+                                None => {
+                                    flush_buffers!();
+                                    tracing::info!("terminal channel None for session {}", task_sid);
+                                    forward_terminal_closed(&task_fwd, &task_sid);
+                                    break;
+                                }
+                                Some(other) => {
+                                    tracing::info!("terminal other msg: {:?} for session {}", other, task_sid);
+                                }
                             }
                         }
-                    }
-                }
-            }
-            tracing::info!("terminal read task ended for {}", read_sid);
-        });
-
-        let write_task = tokio::spawn(async move {
-            tracing::info!("terminal write task started for {}", sid);
-            while let Some(cmd) = cmd_rx.recv().await {
-                match cmd {
-                    TerminalCmd::Input(data, ack) => {
-                        // With a PTY the remote tty line discipline handles
-                        // echo and CR/LF translation, so input bytes are sent
-                        // raw (xterm.js sends \r on Enter, which is correct).
-                        // Skip noisy logging for large ZMODEM payloads.
-                        if data.len() <= 64 {
-                            tracing::info!(
-                                "terminal write task input len={} data={:?} for session {}",
-                                data.len(),
-                                String::from_utf8_lossy(&data),
-                                sid
-                            );
-                        }
-                        // Retry loop: during large ZMODEM transfers the SSH send
-                        // window can temporarily fill up.  A short timeout would
-                        // silently drop bytes, corrupting the transfer.  Use a
-                        // generous per-attempt timeout and retry until the data
-                        // is sent or the channel is truly dead.
-                        let payload = data.clone();
-                        let mut attempts = 0u32;
-                        loop {
-                            match tokio::time::timeout(
-                                std::time::Duration::from_secs(120),
-                                write_half.data_bytes(payload.clone()),
-                            )
-                            .await
-                            {
-                                Ok(Ok(())) => {
-                                    if attempts > 0 {
+                        cmd = cmd_rx.recv() => {
+                            match cmd {
+                                Some(TerminalCmd::Input(data, ack)) => {
+                                    if data.len() <= 64 {
                                         tracing::info!(
-                                            "terminal input sent after {} retries for session {}",
-                                            attempts,
-                                            sid,
+                                            "terminal input len={} data={:?} for session {}",
+                                            data.len(),
+                                            String::from_utf8_lossy(&data),
+                                            task_sid
                                         );
                                     }
-                                    break;
-                                }
-                                Ok(Err(e)) => {
-                                    tracing::warn!(
-                                        "terminal input error: {} for session {}",
-                                        e,
-                                        sid
-                                    );
-                                    break;
-                                }
-                                Err(_) => {
-                                    attempts += 1;
-                                    tracing::warn!(
-                                        "terminal input timed out (attempt {}) for session {}, {} bytes remaining",
-                                        attempts, sid, payload.len(),
-                                    );
-                                    if attempts >= 3 {
-                                        tracing::error!(
-                                            "terminal input giving up after {} timeouts for session {}",
-                                            attempts, sid,
-                                        );
-                                        break;
+                                    let payload = data.clone();
+                                    let mut attempts = 0u32;
+                                    loop {
+                                        match tokio::time::timeout(
+                                            std::time::Duration::from_secs(120),
+                                            channel.data_bytes(payload.clone()),
+                                        ).await {
+                                            Ok(Ok(())) => {
+                                                if attempts > 0 {
+                                                    tracing::info!(
+                                                        "terminal input sent after {} retries for session {}",
+                                                        attempts, task_sid,
+                                                    );
+                                                }
+                                                break;
+                                            }
+                                            Ok(Err(e)) => {
+                                                tracing::warn!("terminal input error: {} for session {}", e, task_sid);
+                                                break;
+                                            }
+                                            Err(_) => {
+                                                attempts += 1;
+                                                tracing::warn!(
+                                                    "terminal input timed out (attempt {}) for session {}, {} bytes remaining",
+                                                    attempts, task_sid, payload.len(),
+                                                );
+                                                if attempts >= 3 {
+                                                    tracing::error!(
+                                                        "terminal input giving up after {} timeouts for session {}",
+                                                        attempts, task_sid,
+                                                    );
+                                                    break;
+                                                }
+                                            }
+                                        }
                                     }
-                                    // retry with the same data
+                                    if let Some(tx) = ack {
+                                        let _ = tx.send(());
+                                    }
+                                }
+                                Some(TerminalCmd::Resize(c, r)) => {
+                                    if let Err(e) = channel.window_change(c, r, 0, 0).await {
+                                        tracing::warn!("terminal resize error: {} for session {}", e, task_sid);
+                                    }
+                                }
+                                Some(TerminalCmd::Close) => {
+                                    tracing::info!("terminal close cmd for session {}", task_sid);
+                                    flush_buffers!();
+                                    let _ = channel.eof().await;
+                                    let _ = channel.close().await;
+                                    forward_terminal_closed(&task_fwd, &task_sid);
+                                    break;
+                                }
+                                None => {
+                                    // cmd_rx dropped — session manager closed
+                                    flush_buffers!();
+                                    let _ = channel.eof().await;
+                                    let _ = channel.close().await;
+                                    break;
                                 }
                             }
                         }
-                        // Notify the caller that the data has been sent (or failed).
-                        if let Some(tx) = ack {
-                            let _ = tx.send(());
-                        }
                     }
-                    TerminalCmd::Resize(c, r) => {
-                        if let Err(e) = write_half.window_change(c, r, 0, 0).await {
-                            tracing::warn!("terminal resize error: {} for session {}", e, sid);
+                } else {
+                    tokio::select! {
+                        msg = channel.wait() => {
+                            match msg {
+                                Some(ChannelMsg::Data { ref data }) => {
+                                    tracing::info!("terminal read Data len={} for session {}", data.len(), task_sid);
+                                    data_buf.extend_from_slice(data);
+                                    has_pending = true;
+                                }
+                                Some(ChannelMsg::ExtendedData { ref data, .. }) => {
+                                    tracing::info!("terminal read ExtendedData len={} for session {}", data.len(), task_sid);
+                                    stderr_buf.extend_from_slice(data);
+                                    has_pending = true;
+                                }
+                                Some(ChannelMsg::ExitStatus { exit_status }) => {
+                                    flush_buffers!();
+                                    tracing::info!("terminal exit_status={} for session {}", exit_status, task_sid);
+                                }
+                                Some(ChannelMsg::Eof) => {
+                                    flush_buffers!();
+                                    tracing::info!("terminal EOF for session {}", task_sid);
+                                }
+                                Some(ChannelMsg::Close) => {
+                                    flush_buffers!();
+                                    tracing::info!("terminal Close for session {}", task_sid);
+                                    forward_terminal_closed(&task_fwd, &task_sid);
+                                    break;
+                                }
+                                None => {
+                                    flush_buffers!();
+                                    tracing::info!("terminal channel None for session {}", task_sid);
+                                    forward_terminal_closed(&task_fwd, &task_sid);
+                                    break;
+                                }
+                                Some(other) => {
+                                    tracing::info!("terminal other msg: {:?} for session {}", other, task_sid);
+                                }
+                            }
                         }
-                    }
-                    TerminalCmd::Close => {
-                        tracing::info!("terminal close cmd for session {}", sid);
-                        let _ = write_half.eof().await;
-                        let _ = write_half.close().await;
-                        forward_terminal_closed(&fwd, &sid);
-                        break;
+                        cmd = cmd_rx.recv() => {
+                            match cmd {
+                                Some(TerminalCmd::Input(data, ack)) => {
+                                    if data.len() <= 64 {
+                                        tracing::info!(
+                                            "terminal input len={} data={:?} for session {}",
+                                            data.len(),
+                                            String::from_utf8_lossy(&data),
+                                            task_sid
+                                        );
+                                    }
+                                    let payload = data.clone();
+                                    let mut attempts = 0u32;
+                                    loop {
+                                        match tokio::time::timeout(
+                                            std::time::Duration::from_secs(120),
+                                            channel.data_bytes(payload.clone()),
+                                        ).await {
+                                            Ok(Ok(())) => {
+                                                if attempts > 0 {
+                                                    tracing::info!(
+                                                        "terminal input sent after {} retries for session {}",
+                                                        attempts, task_sid,
+                                                    );
+                                                }
+                                                break;
+                                            }
+                                            Ok(Err(e)) => {
+                                                tracing::warn!("terminal input error: {} for session {}", e, task_sid);
+                                                break;
+                                            }
+                                            Err(_) => {
+                                                attempts += 1;
+                                                tracing::warn!(
+                                                    "terminal input timed out (attempt {}) for session {}, {} bytes remaining",
+                                                    attempts, task_sid, payload.len(),
+                                                );
+                                                if attempts >= 3 {
+                                                    tracing::error!(
+                                                        "terminal input giving up after {} timeouts for session {}",
+                                                        attempts, task_sid,
+                                                    );
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if let Some(tx) = ack {
+                                        let _ = tx.send(());
+                                    }
+                                }
+                                Some(TerminalCmd::Resize(c, r)) => {
+                                    if let Err(e) = channel.window_change(c, r, 0, 0).await {
+                                        tracing::warn!("terminal resize error: {} for session {}", e, task_sid);
+                                    }
+                                }
+                                Some(TerminalCmd::Close) => {
+                                    tracing::info!("terminal close cmd for session {}", task_sid);
+                                    flush_buffers!();
+                                    let _ = channel.eof().await;
+                                    let _ = channel.close().await;
+                                    forward_terminal_closed(&task_fwd, &task_sid);
+                                    break;
+                                }
+                                None => {
+                                    flush_buffers!();
+                                    let _ = channel.eof().await;
+                                    let _ = channel.close().await;
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
             }
-            tracing::info!("terminal write task ended for {}", sid);
+            tracing::info!("terminal main task ended for {}", task_sid);
         });
 
         let session = TerminalSession {
             server_id: server_id.to_string(),
             cmd_tx,
-            tasks: vec![read_task, write_task],
+            tasks: vec![main_task],
         };
         self.sessions
             .lock()
