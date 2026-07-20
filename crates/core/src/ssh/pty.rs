@@ -62,6 +62,8 @@ pub async fn open_pty_shell(
         // Local modes — keep ECHO and ICANON for interactive shell
         (Pty::ECHO, 1),   // Keep echo on for interactive use
         (Pty::ICANON, 1), // Keep canonical mode for line editing
+        // Control characters
+        (Pty::VERASE, 0x7f), // DEL = backspace erase char (matches keyboard)
     ];
 
     tracing::info!("requesting PTY: cols={}, rows={}", cols, rows);

@@ -92,18 +92,56 @@ object TerminalSessionManager {
     @Synchronized
     fun appendTerminalData(sessionId: String, raw: String) {
         val existing = sessions[sessionId] ?: return
-        val clean = stripAnsi(raw).replace("\r", "")
-        if (clean.isEmpty()) return
-        val endsWithNl = clean.endsWith("\n")
-        val newLines = if (endsWithNl) clean.split("\n").dropLast(1) else clean.split("\n")
+        // Strip ANSI codes, drop \r. Then process backspace (\u0008) and
+        //   DEL (\u007f) by removing the previous character — this mirrors
+        //   what a real terminal does when the server echoes the erase
+        //   sequence (\b \b or \b) for canonical-mode line editing.
+        val stripped = stripAnsi(raw).replace("\r", "").replace("\u007f", "")
+        if (stripped.isEmpty()) return
 
-        val merged = if (!existing.lastLineComplete && existing.output.isNotEmpty() && newLines.isNotEmpty()) {
-            // Previous last line was partial — merge with first new line
-            existing.output.dropLast(1) + listOf(existing.output.last() + newLines.first()) + newLines.drop(1)
+        // Build the new lines, applying backspace to the current last line
+        //   when the chunk starts mid-line.
+        val endsWithNl = stripped.endsWith("\n")
+        val rawLines = if (endsWithNl) stripped.split("\n").dropLast(1) else stripped.split("\n")
+
+        // Merge first new line with existing partial last line, then apply
+        //   backspace processing across the merged content.
+        val (firstLine, restLines) = if (!existing.lastLineComplete && existing.output.isNotEmpty() && rawLines.isNotEmpty()) {
+            val merged0 = existing.output.last() + rawLines.first()
+            merged0 to rawLines.drop(1)
+        } else if (rawLines.isNotEmpty()) {
+            rawLines.first() to rawLines.drop(1)
         } else {
-            existing.output + newLines
+            "" to emptyList()
         }
+
+        val processedFirst = applyBackspace(firstLine)
+        val processedRest = restLines.map { applyBackspace(it) }
+
+        // Rebuild output: keep all but last existing line, then add processed lines.
+        val baseOutput = if (!existing.lastLineComplete && existing.output.isNotEmpty()) {
+            existing.output.dropLast(1)
+        } else {
+            existing.output
+        }
+        val merged = baseOutput + listOf(processedFirst) + processedRest
         sessions[sessionId] = existing.copy(output = merged, lastLineComplete = endsWithNl)
+    }
+
+    /**
+     * Process backspace (\u0008) in a single line: each \b removes the
+     *   preceding character. This handles the server's echo of canonical-mode
+     *   line editing (e.g. `\b \b` for backspace).
+     */
+    private fun applyBackspace(line: String): String {
+        val sb = StringBuilder()
+        for (ch in line) {
+            when (ch) {
+                '\u0008' -> { if (sb.isNotEmpty()) sb.deleteCharAt(sb.length - 1) }
+                else -> sb.append(ch)
+            }
+        }
+        return sb.toString()
     }
 
     @Synchronized

@@ -12,6 +12,8 @@ dist/
 
 # Tauri
 src-tauri/target/
+# Tauri 自动生成的 schema（tauri dev/build 产物）
+src-tauri/gen/
 
 # IDE
 .vscode/
@@ -21,10 +23,26 @@ src-tauri/target/
 .DS_Store
 Thumbs.db
 
+# Playwright 测试产物（自动生成）
+playwright-report/
+test-results/
+
 # 日志
 *.log
+
+# 备份/临时文件
+*.bak
+*.orig
+*.tmp
+*.old
+*.swp
+*.swo
+*~
 
 # GeoIP 数据库（63MB 二进制，不从 git 下载，见 AGENTS.md 部署说明）
 server/data/*.mmdb
 # PHP composer 依赖
 server/vendor/
+
+# 文档目录（设计稿/项目文档不纳入版本管理）
+docs/
