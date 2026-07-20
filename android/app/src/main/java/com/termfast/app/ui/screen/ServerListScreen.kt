@@ -19,6 +19,8 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Terminal
@@ -491,12 +493,43 @@ private fun ServerCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                // VPN toggle button — top right corner
-                VpnToggleButton(
-                    vpnRunning = vpnRunning,
-                    vpnStarting = vpnStarting,
-                    onToggle = onVpnToggle,
-                )
+                // SSH terminal button — top right corner (icon + text pill)
+                Box {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.primary)
+                            .clickable(onClick = onTerminal)
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Icon(
+                            Icons.Filled.Terminal,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                        )
+                        Text(
+                            "SSH终端",
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                    if (terminalSessionCount > 0) {
+                        Badge(
+                            modifier = Modifier.align(Alignment.TopEnd),
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError,
+                        ) {
+                            Text(
+                                if (terminalSessionCount > 9) "9+" else terminalSessionCount.toString(),
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
+                }
             }
 
             // Error banner — only on the card that failed
@@ -570,31 +603,22 @@ private fun ServerCard(
                 Spacer(Modifier.weight(1f))
                 // SOCKS5 proxy toggle button
                 OutlinedIconButton(
-                    icon = if (proxyRunning) Icons.Filled.Stop else Icons.Filled.Cloud,
+                    icon = if (proxyRunning) Icons.Filled.Stop else Icons.Filled.Public,
                     contentDescription = "代理",
                     onClick = onProxyToggle,
                     loading = proxyStarting,
                     tint = if (proxyRunning) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                // Terminal button with badge
+                // VPN toggle button with badge
                 Box {
                     OutlinedIconButton(
-                        icon = Icons.Filled.Terminal,
-                        contentDescription = "终端",
-                        onClick = onTerminal,
+                        icon = if (vpnRunning) Icons.Filled.Stop else Icons.Filled.Shield,
+                        contentDescription = "VPN",
+                        onClick = onVpnToggle,
+                        loading = vpnStarting,
+                        tint = if (vpnRunning) MaterialTheme.colorScheme.error
+                               else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    if (terminalSessionCount > 0) {
-                        Badge(
-                            modifier = Modifier.align(Alignment.TopEnd),
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary,
-                        ) {
-                            Text(
-                                if (terminalSessionCount > 9) "9+" else terminalSessionCount.toString(),
-                                style = MaterialTheme.typography.labelSmall,
-                            )
-                        }
-                    }
                 }
                 // Test button
                 OutlinedIconButton(
@@ -607,52 +631,6 @@ private fun ServerCard(
             }
         }
         }
-    }
-}
-
-@Composable
-private fun VpnToggleButton(
-    vpnRunning: Boolean,
-    vpnStarting: Boolean,
-    onToggle: () -> Unit,
-) {
-    val containerColor = if (vpnRunning || vpnStarting)
-        MaterialTheme.colorScheme.errorContainer
-    else
-        MaterialTheme.colorScheme.primary
-    val contentColor = if (vpnRunning || vpnStarting)
-        MaterialTheme.colorScheme.onErrorContainer
-    else
-        MaterialTheme.colorScheme.onPrimary
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(containerColor)
-            .clickable(enabled = !vpnStarting, onClick = onToggle)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        if (vpnStarting) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(16.dp),
-                strokeWidth = 2.dp,
-                color = contentColor,
-            )
-        } else {
-            Icon(
-                if (vpnRunning) Icons.Filled.Stop else Icons.Filled.PlayArrow,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = contentColor,
-            )
-        }
-        Text(
-            if (vpnStarting) "连接中" else if (vpnRunning) "停止" else "启动VPN",
-            color = contentColor,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Medium,
-        )
     }
 }
 

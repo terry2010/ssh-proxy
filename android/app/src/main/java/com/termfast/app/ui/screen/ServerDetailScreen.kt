@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Warning
@@ -403,7 +404,7 @@ private fun OverviewTab(
                 )
             } else {
                 Icon(
-                    if (vpnRunning) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                    if (vpnRunning) Icons.Filled.Stop else Icons.Filled.Shield,
                     contentDescription = null,
                     modifier = Modifier.size(22.dp),
                 )
