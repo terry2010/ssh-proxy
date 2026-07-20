@@ -4,19 +4,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
@@ -25,10 +22,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -38,13 +38,32 @@ import com.termfast.app.data.RustRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun TerminalScreen(navController: NavController, serverId: String, existingSessionId: String? = null) {
     val repo = remember { RustRepository }
     val scope = rememberCoroutineScope()
+
+    // Dark status bar: force light icons (white) on dark terminal background
+    val view = LocalView.current
+    DisposableEffect(view) {
+        view.post {
+            val window = (view.context as android.app.Activity).window
+            // Set status bar background color (works even in edge-to-edge)
+            window.statusBarColor = android.graphics.Color.parseColor("#1E1E2E")
+            val controller = androidx.core.view.WindowCompat.getInsetsController(window, view)
+            controller?.isAppearanceLightStatusBars = false
+        }
+        onDispose {
+            view.post {
+                val window = (view.context as android.app.Activity).window
+                window.statusBarColor = android.graphics.Color.TRANSPARENT
+                val controller = androidx.core.view.WindowCompat.getInsetsController(window, view)
+                controller?.isAppearanceLightStatusBars = true
+            }
+        }
+    }
     val context = LocalContext.current
     // Use existing session if provided, otherwise get or create
     val sessionId = remember(existingSessionId) {
@@ -83,7 +102,6 @@ fun TerminalScreen(navController: NavController, serverId: String, existingSessi
     }
     var connecting by remember(sessionId) { mutableStateOf(!(connected)) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
-    var inputText by remember { mutableStateOf("") }
 
     // Collect terminal events
     LaunchedEffect(sessionId) {
@@ -166,18 +184,213 @@ fun TerminalScreen(navController: NavController, serverId: String, existingSessi
     val terminalBg = Color(0xFF1E1E2E)
     val terminalFg = Color(0xFFCDD6F4)
     val terminalGreen = Color(0xFFA6E3A1)
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    // Landscape: which side is the keyboard on? false = right (default), true = left
+    var keyboardOnLeft by remember { mutableStateOf(false) }
+    // System IME mode (externally managed so the keyboard can collapse to 0
+    //   height and a floating toggle button overlays the terminal).
+    var useSystemKeyboard by remember { mutableStateOf(false) }
+    val toggleSystemKeyboard = {
+        useSystemKeyboard = !useSystemKeyboard
+    }
 
-    // Track soft keyboard visibility
-    val imeVisible = WindowInsets.isImeVisible
-    var showKeyboard by remember { mutableStateOf(false) }
+    if (isLandscape) {
+        // Landscape: terminal + keyboard side by side. Keyboard width is fixed
+        //   to the short edge so keys keep portrait size. Side is toggleable.
+        val keyboardWidth = configuration.screenHeightDp.dp
+        val keyboardModifier = Modifier.width(keyboardWidth)
+        val onKeyLambda = { key: String -> if (connected) repo.writeTerminal(sessionId, key) }
+        val togglePosition = { keyboardOnLeft = !keyboardOnLeft }
 
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(terminalBg)
+                .statusBarsPadding()
+                .imePadding()
+        ) {
+            // Order depends on keyboard side. Terminal Box always weight(1f).
+            if (keyboardOnLeft && !useSystemKeyboard) {
+                TerminalKeyboard(
+                    onKey = onKeyLambda,
+                    enabled = connected,
+                    modifier = keyboardModifier,
+                    onTogglePosition = togglePosition,
+                    keyboardOnLeft = true,
+                    onToggleSystemKeyboard = toggleSystemKeyboard,
+                )
+            }
+            // Terminal output area
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .background(terminalBg)
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+            ) {
+            if (connecting) {
+                Row(
+                    modifier = Modifier.align(Alignment.Center),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = terminalGreen,
+                    )
+                    Text(
+                        "正在连接终端...",
+                        color = terminalFg,
+                        fontSize = 14.sp,
+                    )
+                }
+            } else if (errorMsg != null && outputLines.isEmpty()) {
+                Column(
+                    modifier = Modifier.align(Alignment.Center),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        "⚠ $errorMsg",
+                        color = MaterialTheme.colorScheme.error,
+                        fontSize = 14.sp,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "请先在服务器详情页启动 VPN 或代理",
+                        color = terminalFg.copy(alpha = 0.6f),
+                        fontSize = 12.sp,
+                    )
+                }
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    items(outputLines) { line ->
+                        Text(
+                            line,
+                            color = terminalFg,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+            }
+
+            // Session name — glassmorphism card top-right, click for actions
+            GlassChip(
+                text = title,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 4.dp, end = 4.dp)
+                    .clickable { showSheet = true },
+                textColor = terminalFg,
+            )
+
+            // System-IME mode: floating "switch back" button at bottom-right
+            if (useSystemKeyboard) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(bottom = 4.dp, end = 4.dp)
+                        .height(28.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFF89B4FA))
+                        .clickable { toggleSystemKeyboard() }
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "⌨ 切换终端键盘",
+                        color = Color(0xFF181825),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                    )
+                }
+            }
+
+            // Disconnected banner — overlaid at bottom of terminal area
+            if (!connected && !connecting && outputLines.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.errorContainer)
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.Warning,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                    Text(
+                        "连接已断开",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = {
+                            connecting = true
+                            errorMsg = null
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    val status = repo.getServerStatus(serverId)
+                                    if (status.status != "connected") {
+                                        repo.connectServer(serverId)
+                                    }
+                                    val ok = repo.openTerminal(serverId, sessionId, 80, 24)
+                                    withContext(Dispatchers.Main) {
+                                        if (ok) {
+                                            connected = true
+                                            connecting = false
+                                            TerminalSessionManager.setConnectedBySession(sessionId, true)
+                                        } else {
+                                            errorMsg = "重连失败"
+                                            connecting = false
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    ) {
+                        Text("重连", color = MaterialTheme.colorScheme.onErrorContainer)
+                    }
+                }
+            }
+        }
+
+        // Keyboard on the right side (default). Left side already rendered
+        //   above when keyboardOnLeft == true. Hidden in system-IME mode.
+        if (!keyboardOnLeft && !useSystemKeyboard) {
+            TerminalKeyboard(
+                onKey = onKeyLambda,
+                enabled = connected,
+                modifier = keyboardModifier,
+                onTogglePosition = togglePosition,
+                keyboardOnLeft = false,
+                onToggleSystemKeyboard = toggleSystemKeyboard,
+            )
+        }
+    }
+} else {
+    // Portrait: terminal on top, keyboard at bottom
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(terminalBg)
             .statusBarsPadding()
+            .imePadding()
     ) {
-        // Terminal output area — fills available space
+        // Terminal output area
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -245,88 +458,123 @@ fun TerminalScreen(navController: NavController, serverId: String, existingSessi
                     .clickable { showSheet = true },
                 textColor = terminalFg,
             )
-        }
 
-        // Disconnected banner — shown when connection was lost
-        if (!connected && !connecting && outputLines.isNotEmpty()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.errorContainer)
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Icon(
-                    Icons.Filled.Warning,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                    tint = MaterialTheme.colorScheme.onErrorContainer,
-                )
-                Text(
-                    "连接已断开",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(
-                    onClick = {
-                        connecting = true
-                        errorMsg = null
-                        scope.launch {
-                            withContext(Dispatchers.IO) {
-                                val status = repo.getServerStatus(serverId)
-                                if (status.status != "connected") {
-                                    repo.connectServer(serverId)
-                                }
-                                val ok = repo.openTerminal(serverId, sessionId, 80, 24)
-                                withContext(Dispatchers.Main) {
-                                    if (ok) {
-                                        connected = true
-                                        connecting = false
-                                        TerminalSessionManager.setConnectedBySession(sessionId, true)
-                                    } else {
-                                        errorMsg = "重连失败"
-                                        connecting = false
+            // System-IME mode: floating "switch back" button at bottom-right
+            if (useSystemKeyboard) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(bottom = 4.dp, end = 4.dp)
+                        .height(28.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFF89B4FA))
+                        .clickable { toggleSystemKeyboard() }
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "⌨ 切换终端键盘",
+                        color = Color(0xFF181825),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                    )
+                }
+            }
+
+            // Disconnected banner — overlaid at bottom of terminal area
+            if (!connected && !connecting && outputLines.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.errorContainer)
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.Warning,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                    Text(
+                        "连接已断开",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = {
+                            connecting = true
+                            errorMsg = null
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    val status = repo.getServerStatus(serverId)
+                                    if (status.status != "connected") {
+                                        repo.connectServer(serverId)
+                                    }
+                                    val ok = repo.openTerminal(serverId, sessionId, 80, 24)
+                                    withContext(Dispatchers.Main) {
+                                        if (ok) {
+                                            connected = true
+                                            connecting = false
+                                            TerminalSessionManager.setConnectedBySession(sessionId, true)
+                                        } else {
+                                            errorMsg = "重连失败"
+                                            connecting = false
+                                        }
                                     }
                                 }
                             }
-                        }
-                    },
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                ) {
-                    Text("重连", color = MaterialTheme.colorScheme.onErrorContainer)
+                        },
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    ) {
+                        Text("重连", color = MaterialTheme.colorScheme.onErrorContainer)
+                    }
                 }
             }
         }
 
-        // Input bar (only when connected)
-        if (connected) {
-            TerminalInputBar(
-                text = inputText,
-                onTextChange = { inputText = it },
-                onSend = {
-                    if (inputText.isNotEmpty()) {
-                        val cmd = inputText + "\r"
-                        repo.writeTerminal(sessionId, cmd)
-                        inputText = ""
-                    }
+        // Custom terminal keyboard — hidden in system-IME mode so it
+        //   collapses to 0 height and the terminal fills the space above IME.
+        if (!useSystemKeyboard) {
+            TerminalKeyboard(
+                onKey = { key ->
+                    if (connected) repo.writeTerminal(sessionId, key)
                 },
-                terminalBg = terminalBg,
-                terminalFg = terminalFg,
+                enabled = connected,
+                onToggleSystemKeyboard = toggleSystemKeyboard,
             )
         }
+    }
+    } // end if-else orientation
 
-        // Bottom auxiliary key bar
-        TerminalKeyBar(
-            onKey = { key ->
-                if (connected) repo.writeTerminal(sessionId, key)
+    // === System IME mode ===
+    // Hidden BasicTextField that triggers the system IME. Always present so
+    //   focus state survives mode toggles. In system-IME mode it requests
+    //   focus; in custom-keyboard mode it clears focus.
+    val systemInput = remember { mutableStateOf("") }
+    val focusRequester = remember { FocusRequester() }
+    if (useSystemKeyboard) {
+        BasicTextField(
+            value = systemInput.value,
+            onValueChange = { newValue ->
+                val added = newValue.substring(systemInput.value.length)
+                if (added.isNotEmpty() && connected) {
+                    repo.writeTerminal(sessionId, added)
+                }
+                systemInput.value = ""
             },
-            onToggleKeyboard = { showKeyboard = !showKeyboard },
-            keyboardVisible = imeVisible || showKeyboard,
-            terminalBg = terminalBg,
-            terminalFg = terminalFg,
+            modifier = Modifier
+                .size(1.dp)
+                .focusRequester(focusRequester),
+            keyboardOptions = KeyboardOptions(),
         )
+        LaunchedEffect(Unit) {
+            focusRequester.requestFocus()
+        }
     }
 
     // === Session action bottom sheet ===
@@ -471,175 +719,7 @@ fun TerminalScreen(navController: NavController, serverId: String, existingSessi
     }
 }
 
-@Composable
-private fun TerminalInputBar(
-    text: String,
-    onTextChange: (String) -> Unit,
-    onSend: () -> Unit,
-    terminalBg: Color,
-    terminalFg: Color,
-) {
-    val inputBg = Color(0xFF181825)
-    val inputBorder = Color(0xFF45475A)
-    val accentColor = Color(0xFF89B4FA)
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(inputBg)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.Bottom,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        // Prompt symbol
-        Text(
-            "$ ",
-            color = accentColor,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(bottom = 12.dp),
-        )
-        // Input field — multiline, max 5 lines, scrollable
-        OutlinedTextField(
-            value = text,
-            onValueChange = onTextChange,
-            modifier = Modifier
-                .weight(1f)
-                .heightIn(max = 100.dp)
-                .verticalScroll(rememberScrollState()),
-            placeholder = {
-                Text(
-                    "输入命令...",
-                    color = terminalFg.copy(alpha = 0.4f),
-                    fontSize = 14.sp,
-                )
-            },
-            singleLine = false,
-            maxLines = 5,
-            shape = RoundedCornerShape(8.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = terminalFg,
-                unfocusedTextColor = terminalFg,
-                focusedBorderColor = accentColor,
-                unfocusedBorderColor = inputBorder,
-                cursorColor = accentColor,
-                focusedContainerColor = Color.Transparent,
-                unfocusedContainerColor = Color.Transparent,
-            ),
-            textStyle = androidx.compose.ui.text.TextStyle(
-                fontSize = 14.sp,
-            ),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
-            trailingIcon = null,
-        )
-        // Send button
-        IconButton(
-            onClick = onSend,
-            enabled = text.isNotEmpty(),
-            modifier = Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(if (text.isNotEmpty()) accentColor else inputBorder)
-                .align(Alignment.Bottom),
-        ) {
-            Icon(
-                Icons.Filled.Send,
-                contentDescription = "发送",
-                tint = if (text.isNotEmpty()) inputBg else terminalFg.copy(alpha = 0.3f),
-                modifier = Modifier.size(18.dp),
-            )
-        }
-    }
-}
-
-// === SECTION 2: Bottom auxiliary key bar ===
-
-@Composable
-private fun TerminalKeyBar(
-    onKey: (String) -> Unit,
-    onToggleKeyboard: () -> Unit,
-    keyboardVisible: Boolean,
-    terminalBg: Color,
-    terminalFg: Color,
-) {
-    val keyBg = Color(0xFF181825)
-    val keyBorder = Color(0xFF45475A)
-    val accentColor = Color(0xFF89B4FA)
-
-    val auxKeys = listOf(
-        "ESC" to "\u001B",
-        "TAB" to "\t",
-        "↑" to "\u001B[A",
-        "↓" to "\u001B[B",
-        "←" to "\u001B[D",
-        "→" to "\u001B[C",
-        "⏎" to "\r",
-        "⌫" to "\u007F",
-    )
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(keyBg)
-            .padding(horizontal = 6.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // Auxiliary keys
-        auxKeys.forEach { (label, value) ->
-            AuxKeyButton(
-                label = label,
-                onClick = { value?.let { onKey(it) } },
-                bg = keyBg,
-                border = keyBorder,
-                fg = terminalFg,
-            )
-        }
-        Spacer(Modifier.weight(1f))
-        // Keyboard toggle button
-        IconButton(
-            onClick = onToggleKeyboard,
-            modifier = Modifier
-                .size(36.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(if (keyboardVisible) accentColor else keyBorder),
-        ) {
-            Icon(
-                Icons.Filled.Keyboard,
-                contentDescription = "键盘",
-                tint = if (keyboardVisible) keyBg else terminalFg.copy(alpha = 0.7f),
-                modifier = Modifier.size(18.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun AuxKeyButton(
-    label: String,
-    onClick: () -> Unit,
-    bg: Color,
-    border: Color,
-    fg: Color,
-) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(border.copy(alpha = 0.5f))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            label,
-            color = fg.copy(alpha = 0.8f),
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-        )
-    }
-}
-
-// === SECTION 3: Glassmorphism chip ===
+// === SECTION 2: Glassmorphism chip ===
 
 @Composable
 private fun GlassChip(

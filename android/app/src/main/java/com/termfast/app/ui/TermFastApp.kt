@@ -42,32 +42,37 @@ fun TermFastApp() {
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
 
+    // Hide bottom nav on terminal screens (immersive mode)
+    val currentRoute = current?.route
+    val showBottomBar = currentRoute?.startsWith("terminal") != true
+
     Scaffold(
         bottomBar = {
-            NavigationBar {
-                screens.forEach { s ->
-                    NavigationBarItem(
-                        icon = { Icon(s.icon, contentDescription = s.label) },
-                        label = { Text(s.label) },
-                        selected = current?.hierarchy?.any { it.route == s.route } == true,
-                        onClick = {
-                            navController.navigate(s.route) {
-                                popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
+            if (showBottomBar) {
+                NavigationBar {
+                    screens.forEach { s ->
+                        NavigationBarItem(
+                            icon = { Icon(s.icon, contentDescription = s.label) },
+                            label = { Text(s.label) },
+                            selected = current?.hierarchy?.any { it.route == s.route } == true,
+                            onClick = {
+                                navController.navigate(s.route) {
+                                    popUpTo(navController.graph.findStartDestination().id) {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
                                 }
-                                launchSingleTop = true
-                                restoreState = true
                             }
-                        }
-                    )
+                        )
+                    }
                 }
             }
         }
     ) { inner ->
-        NavHost(
-            navController = navController,
-            startDestination = Screen.Servers.route,
-            modifier = Modifier
+        // On terminal screens, don't apply Scaffold inner padding (immersive mode)
+        val navModifier = if (showBottomBar) {
+            Modifier
                 .padding(inner)
                 .clickable(
                     interactionSource = androidx.compose.foundation.interaction.MutableInteractionSource(),
@@ -76,6 +81,13 @@ fun TermFastApp() {
                     focusManager.clearFocus()
                     keyboardController?.hide()
                 }
+        } else {
+            Modifier
+        }
+        NavHost(
+            navController = navController,
+            startDestination = Screen.Servers.route,
+            modifier = navModifier,
         ) {
             composable(Screen.Servers.route) { ServerListScreen(navController) }
             composable(Screen.Logs.route) { LogScreen() }
