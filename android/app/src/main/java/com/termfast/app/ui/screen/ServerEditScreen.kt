@@ -51,9 +51,8 @@ fun ServerEditScreen(navController: NavController, serverId: String?) {
     LaunchedEffect(serverId) {
         if (serverId != null) {
             loading = true
-            // Wait for credential store to be unlocked before loading creds.
-            // tryCachedUnlock runs async in MainActivity.onCreate; if the user
-            // opens edit screen quickly, the store may still be locked.
+            // Wait for credential store to be ready (unlocked or pending).
+            // PENDING mode is OK — map is loaded from plaintext file in open().
             val deadline = System.currentTimeMillis() + 3000
             while (System.currentTimeMillis() < deadline) {
                 if (CredentialManager.isUnlocked()) break

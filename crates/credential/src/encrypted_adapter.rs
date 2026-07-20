@@ -54,17 +54,36 @@ pub struct EncryptedFileCredentialStore {
 
 impl EncryptedFileCredentialStore {
     /// Open an encrypted credential store at the given path.
-    /// If the file doesn't exist, starts in **pending** mode (memory-only).
-    /// If the file exists, starts in locked state — call `unlock()` before using.
+    /// If the file doesn't exist, starts in **pending** mode.
+    /// In pending mode, credentials are persisted to a plaintext JSON file
+    /// (`credentials.json` next to the encrypted file) so they survive app
+    /// restarts without requiring a master password.
+    /// If the encrypted file exists, starts in locked state — call `unlock()`.
     pub fn open(path: PathBuf) -> Self {
+        let plaintext_path = path.with_extension("json");
         let store = EncryptedCredentialStore::open(path);
         let pending = store.is_absent();
+        // In pending mode, load from plaintext fallback file if it exists.
+        let initial_map = if pending {
+            if plaintext_path.exists() {
+                std::fs::read_to_string(&plaintext_path)
+                    .ok()
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default()
+            } else {
+                HashMap::new()
+            }
+        } else {
+            // Encrypted file exists — start locked (map loaded on unlock).
+            // But check if there's also a plaintext file from before the
+            // master password was set; we'll migrate on initialize().
+            HashMap::new()
+        };
         Self {
             store,
             inner: Mutex::new(Inner {
                 key: None,
-                // In pending mode, map is Some(empty) so save/load work.
-                map: if pending { Some(HashMap::new()) } else { None },
+                map: if pending { Some(initial_map) } else { None },
                 pending,
             }),
         }
@@ -88,6 +107,7 @@ impl EncryptedFileCredentialStore {
     /// First-time setup: initialize the encrypted store with the pending
     /// in-memory credentials (if any) and the given master password.
     /// Also unlocks (caches key + map). Transitions out of pending mode.
+    /// Deletes the plaintext fallback file if it exists.
     pub fn initialize(&self, master_password: &str) -> Result<()> {
         // Grab the pending map (if in pending mode) so we can persist it.
         let pending_map = {
@@ -109,6 +129,12 @@ impl EncryptedFileCredentialStore {
         inner.key = Some(key);
         inner.map = Some(pending_map.unwrap_or_default());
         inner.pending = false;
+        drop(inner);
+        // Remove plaintext fallback file — credentials are now encrypted.
+        let plaintext_path = self.store.path().with_extension("json");
+        if plaintext_path.exists() {
+            let _ = std::fs::remove_file(&plaintext_path);
+        }
         Ok(())
     }
 
@@ -182,9 +208,15 @@ impl EncryptedFileCredentialStore {
         Ok(())
     }
 
-    /// Reset: delete the encrypted file and return to pending mode.
+    /// Reset: delete the encrypted file and plaintext fallback, return to
+    /// pending mode.
     pub fn reset(&self) -> Result<()> {
         self.store.reset()?;
+        // Also remove plaintext fallback file.
+        let plaintext_path = self.store.path().with_extension("json");
+        if plaintext_path.exists() {
+            let _ = std::fs::remove_file(&plaintext_path);
+        }
         let mut inner = self.inner.lock().unwrap();
         inner.key.zeroize();
         if let Some(ref mut map) = inner.map {
@@ -240,12 +272,24 @@ impl EncryptedFileCredentialStore {
     /// save/delete, but can be called explicitly.
     fn flush(&self) -> Result<()> {
         let inner = self.inner.lock().unwrap();
-        let key = inner
-            .key
-            .as_ref()
-            .ok_or_else(|| anyhow!("credential store is locked"))?;
         let map = inner
             .map
+            .as_ref()
+            .ok_or_else(|| anyhow!("credential store is locked"))?;
+        if inner.pending {
+            // Pending mode: persist to plaintext JSON file so credentials
+            // survive app restarts without a master password.
+            let plaintext_path = self.store.path().with_extension("json");
+            let json = serde_json::to_vec_pretty(map)?;
+            drop(inner);
+            // Write atomically: temp file + rename
+            let tmp = plaintext_path.with_extension("tmp");
+            std::fs::write(&tmp, json)?;
+            std::fs::rename(&tmp, &plaintext_path)?;
+            return Ok(());
+        }
+        let key = inner
+            .key
             .as_ref()
             .ok_or_else(|| anyhow!("credential store is locked"))?;
         // Zeroizing so the plaintext JSON is wiped after encryption.
@@ -261,19 +305,16 @@ impl EncryptedFileCredentialStore {
 
 impl CredentialStore for EncryptedFileCredentialStore {
     fn save(&self, key: &str, value: &str) -> Result<()> {
-        let pending = {
+        {
             let mut inner = self.inner.lock().unwrap();
             let map = inner
                 .map
                 .as_mut()
                 .ok_or_else(|| anyhow!("credential store is locked"))?;
             map.insert(key.to_string(), value.to_string());
-            inner.pending
-        };
-        // In pending mode, don't flush to file (no key yet).
-        if !pending {
-            self.flush()?;
         }
+        // Flush to file (encrypted if unlocked, plaintext if pending).
+        self.flush()?;
         Ok(())
     }
 
@@ -289,16 +330,15 @@ impl CredentialStore for EncryptedFileCredentialStore {
     }
 
     fn delete(&self, key: &str) -> Result<()> {
-        let (changed, pending) = {
+        let changed = {
             let mut inner = self.inner.lock().unwrap();
             let map = inner
                 .map
                 .as_mut()
                 .ok_or_else(|| anyhow!("credential store is locked"))?;
-            let c = map.remove(key).is_some();
-            (c, inner.pending)
+            map.remove(key).is_some()
         };
-        if changed && !pending {
+        if changed {
             self.flush()?;
         }
         Ok(())
@@ -306,7 +346,7 @@ impl CredentialStore for EncryptedFileCredentialStore {
 
     fn delete_all_for_server(&self, server_id: &str) -> Result<()> {
         let prefix = format!("{}::{}::", super::SERVICE_NAME, server_id);
-        let (changed, pending) = {
+        let changed = {
             let mut inner = self.inner.lock().unwrap();
             let map = inner
                 .map
@@ -314,9 +354,9 @@ impl CredentialStore for EncryptedFileCredentialStore {
                 .ok_or_else(|| anyhow!("credential store is locked"))?;
             let before = map.len();
             map.retain(|k, _| !k.starts_with(&prefix));
-            (map.len() != before, inner.pending)
+            map.len() != before
         };
-        if changed && !pending {
+        if changed {
             self.flush()?;
         }
         Ok(())
@@ -521,6 +561,7 @@ mod tests {
     fn test_pending_mode_memory_only() {
         let dir = tempdir().unwrap();
         let path = store_path(dir.path());
+        let plaintext_path = path.with_extension("json");
         let store = EncryptedFileCredentialStore::open(path.clone());
 
         // No file exists → pending mode.
@@ -532,14 +573,18 @@ mod tests {
         store.save("k1", "v1").unwrap();
         assert_eq!(store.load("k1").unwrap(), "v1");
 
-        // File should NOT exist on disk yet.
+        // Encrypted file should NOT exist yet, but plaintext fallback should.
         assert!(!path.exists());
+        assert!(plaintext_path.exists());
 
-        // Initialize with password → pending credentials flushed to file.
+        // Initialize with password → pending credentials flushed to encrypted file.
         store.initialize("pw").unwrap();
         assert!(!store.is_pending());
         assert!(store.is_initialized());
         assert!(path.exists());
+
+        // Plaintext fallback should be deleted after initialize.
+        assert!(!plaintext_path.exists());
 
         // Credentials survived the transition.
         assert_eq!(store.load("k1").unwrap(), "v1");
@@ -566,5 +611,27 @@ mod tests {
         store2.unlock("secret").unwrap();
         assert_eq!(store2.load("a").unwrap(), "1");
         assert_eq!(store2.load("b").unwrap(), "2");
+    }
+
+    #[test]
+    fn test_pending_mode_persists_to_plaintext_across_reopen() {
+        let dir = tempdir().unwrap();
+        let path = store_path(dir.path());
+
+        // Phase 1: pending mode (no master password), save credentials.
+        {
+            let store = EncryptedFileCredentialStore::open(path.clone());
+            assert!(store.is_pending());
+            store.save("k1", "v1").unwrap();
+            store.save("k2", "v2").unwrap();
+        }
+
+        // Phase 2: reopen — should still be pending, credentials loaded from
+        // plaintext fallback file.
+        let store2 = EncryptedFileCredentialStore::open(path);
+        assert!(store2.is_pending());
+        assert!(store2.is_unlocked()); // pending counts as unlocked
+        assert_eq!(store2.load("k1").unwrap(), "v1");
+        assert_eq!(store2.load("k2").unwrap(), "v2");
     }
 }

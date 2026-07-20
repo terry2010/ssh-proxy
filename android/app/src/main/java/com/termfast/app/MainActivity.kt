@@ -58,7 +58,8 @@ class MainActivity : ComponentActivity() {
         // Run on IO dispatcher to avoid ANR — Argon2id key derivation
         // (32 MiB memory) can take 200-500ms on low-end devices.
         CoroutineScope(Dispatchers.IO).launch {
-            CredentialManager.tryCachedUnlock(this@MainActivity)
+            val ok = CredentialManager.tryCachedUnlock(this@MainActivity)
+            android.util.Log.i("MainActivity", "tryCachedUnlock result: $ok, isUnlocked: ${CredentialManager.isUnlocked()}")
         }
         NotificationHelper.ensureChannels(this)
         requestNotificationPermission()

@@ -56,8 +56,11 @@ object CredentialManager {
 
     /** Try to unlock using the cached derived key (no user prompt). */
     fun tryCachedUnlock(context: Context): Boolean {
-        val cached = prefs(context).getString(KEY_CACHED, null) ?: return false
+        val cached = prefs(context).getString(KEY_CACHED, null)
+        android.util.Log.i("CredentialManager", "tryCachedUnlock: cached key present=${cached != null}, status=${status()}")
+        if (cached == null) return false
         val ok = RustBridge.nativeCredentialUnlockWithKey(cached)
+        android.util.Log.i("CredentialManager", "tryCachedUnlock: unlockWithKey result=$ok, status=${status()}")
         if (!ok) {
             // Cached key is stale — delete it so user is prompted next time.
             prefs(context).edit().remove(KEY_CACHED).apply()

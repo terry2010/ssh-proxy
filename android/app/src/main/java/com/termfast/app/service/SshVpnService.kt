@@ -201,14 +201,24 @@ class SshVpnService : VpnService() {
         perAppMode: String,
         perAppPackages: Array<String>
     ) {
-        // Wait for credential store to be unlocked before connecting.
-        // tryCachedUnlock runs async in MainActivity.onCreate; if the user
-        // taps "connect" quickly, the Argon2id key derivation may not have
-        // finished yet, causing loadCredential() to return null → "未保存密码".
+        // Wait for credential store to be unlocked (or pending) before connecting.
+        // tryCachedUnlock runs async in MainActivity.onCreate; if the user taps
+        // "connect" quickly, the Argon2id key derivation may not have finished
+        // yet, causing loadCredential() to return null.
+        // PENDING mode is OK — map is loaded synchronously from plaintext file
+        // in open(), so credentials are available immediately.
         val deadline = System.currentTimeMillis() + 3000
+        var waited = 0
         while (System.currentTimeMillis() < deadline) {
-            if (CredentialManager.isUnlocked()) break
+            if (CredentialManager.isUnlocked()) {
+                Log.i(TAG, "Credential store ready (status=${CredentialManager.status()}) after ${waited}ms")
+                break
+            }
             Thread.sleep(50)
+            waited += 50
+        }
+        if (!CredentialManager.isUnlocked()) {
+            Log.w(TAG, "Credential store not ready (status=${CredentialManager.status()}) after ${waited}ms — proceeding anyway")
         }
 
         // Ensure SSH is connected and proxy is running before bringing up the TUN
