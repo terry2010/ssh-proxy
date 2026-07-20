@@ -1,15 +1,15 @@
 {
-  "version": "0.2.7",
+  "version": "0.2.8",
   "notes": "See the assets below to download this version.",
-  "pub_date": "2026-07-20T06:00:45.067Z",
+  "pub_date": "2026-07-20T07:50:51.875Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZkdZaUk1UWpPbjdBaEFyczZPSFlkbmMxRG00dDV5RTZpZWVGU1NUQ3dFdUljdjVCb0pPRnBibTU1Tm9hbVdHTjd3WWJVbFpJZ1F1ZTdKcVhkSDloWDNlRnpkbXJpT1FRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0NTI2ODIwCWZpbGU6VGVybUZhc3QuYXBwLnRhci5negpuNVh0OHl3VjRIVmVTdnR6cXloWVR0dXY1MGdBSE1JMTc4eXVsdHN3b1VyQlFNOU9FcDB2ZUtZT1BJRUFMbm1aZG5HM1dIS3NXaTJwbmZOekVhN2lBUT09Cg==",
-      "url": "https://github.com/terry2010/termfast/releases/download/v0.2.7/TermFast_aarch64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZkdZaUk1UWpPbjUzR2JBNW5Ec0NnemNJTyswaUp1QzBEci80Kzkwb3JzVTdCdU1CK3g0SjhjWDFEWXU5cE9yVGhPUjgvREZZaG9BanhZWFNKa28xTmhPZHJwT2wwWVFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0NTMzNjE0CWZpbGU6VGVybUZhc3QuYXBwLnRhci5negpBM05qQnoxaldtUEkwM3VmZFRtMEVzT0pTenV2YkhXK0JodFFqUlJJd3N1WjJ3UlEwSnNONVhwN2tRS3lWRHNCRFlaN0grdHZoZ1lXZFU1Z1ZkMUNEQT09Cg==",
+      "url": "https://github.com/terry2010/termfast/releases/download/v0.2.8/TermFast_aarch64.app.tar.gz"
     },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZkdZaUk1UWpPbngzUWgyK1BwQ21zb3dPdUlrSE1oK05XM1JaQlU1cXQzR2lQOHdqbGV2SWNjMFI1V2ZNUEF6MmdFeUw2U05PL24rY3pQK3NZa21HMElZTlBaaG9hVVFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0NTI3MjIyCWZpbGU6VGVybUZhc3RfMC4yLjdfeDY0LXNldHVwLmV4ZQpKUnlBZTk0R0V6L3V2Q0oyQkUybmxTakFSaFkzZEFSa2FWd0Rpc3FkZytVN2JPQTNaK2Z2TmNBVTBZWmltVTljMW1ORGpybW02MC9qWi9pMjZaSFREdz09Cg==",
-      "url": "https://github.com/terry2010/termfast/releases/download/v0.2.7/TermFast_0.2.7_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZkdZaUk1UWpPbi9XVW03RXFxYjJQTTBRMU0yNUlYaHh3ZHNlUTE4ZTUxVks3YnB4U21IdVFhSW1EbFUxWkhUakZ2TWJzY3QzQnZxRlFvNm9VVDBvWE1tTjdpNTZ2d3dJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0NTMzODMwCWZpbGU6VGVybUZhc3RfMC4yLjhfeDY0LXNldHVwLmV4ZQpDUGNPYzdXMEo4OTFaeWhCcjh1K1ovVGEwZFByZ1pNcWk2VVpqa09tVnYyKzZkRDdpN0pPYXJJRlB1OXB3b1JJZzlJVlBrQ0lvT2tXcXAyOFJNN3lDdz09Cg==",
+      "url": "https://github.com/terry2010/termfast/releases/download/v0.2.8/TermFast_0.2.8_x64-setup.exe"
     }
   }
 }
