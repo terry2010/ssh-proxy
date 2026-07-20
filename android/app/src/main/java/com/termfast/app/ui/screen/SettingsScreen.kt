@@ -19,7 +19,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.termfast.app.data.AppSettings
@@ -391,6 +393,7 @@ private fun ImportPasswordDialog(
                     onValueChange = { pw = it },
                     label = { Text("主密码") },
                     visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     singleLine = true,
                     isError = error != null,
                 )
@@ -438,6 +441,7 @@ private fun SetupPasswordDialog(
                     onValueChange = { pw = it },
                     label = { Text("主密码") },
                     visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     singleLine = true,
                 )
                 OutlinedTextField(
@@ -445,6 +449,7 @@ private fun SetupPasswordDialog(
                     onValueChange = { confirm = it },
                     label = { Text("确认主密码") },
                     visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     singleLine = true,
                     isError = confirm.isNotEmpty() && pw != confirm,
                 )
@@ -481,6 +486,7 @@ private fun ChangePasswordDialog(
                     onValueChange = { old = it },
                     label = { Text("当前主密码") },
                     visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     singleLine = true,
                 )
                 OutlinedTextField(
@@ -488,6 +494,7 @@ private fun ChangePasswordDialog(
                     onValueChange = { new = it },
                     label = { Text("新主密码") },
                     visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     singleLine = true,
                 )
                 OutlinedTextField(
@@ -495,6 +502,7 @@ private fun ChangePasswordDialog(
                     onValueChange = { confirm = it },
                     label = { Text("确认新密码") },
                     visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     singleLine = true,
                     isError = confirm.isNotEmpty() && new != confirm,
                 )
