@@ -115,6 +115,7 @@ function buildManifest(array $release, bool $useProxy, string $proxyPrefix, stri
         $assetMap[$asset['name']] = $asset;
     }
 
+    $tag = $release['tag_name'] ?? "v{$version}";
     $platforms = [];
 
     // macOS Apple Silicon — .app.tar.gz
@@ -124,7 +125,7 @@ function buildManifest(array $release, bool $useProxy, string $proxyPrefix, stri
         if ($sig) {
             $platforms['darwin-aarch64'] = [
                 'signature' => $sig,
-                'url' => assetUrl($macAsset['name'], $useProxy, $proxyPrefix, $githubBase),
+                'url' => assetUrl($macAsset['name'], $useProxy, $proxyPrefix, $githubBase, $tag),
             ];
         }
     }
@@ -136,7 +137,7 @@ function buildManifest(array $release, bool $useProxy, string $proxyPrefix, stri
         if ($sig) {
             $platforms['windows-x86_64'] = [
                 'signature' => $sig,
-                'url' => assetUrl($winAsset['name'], $useProxy, $proxyPrefix, $githubBase),
+                'url' => assetUrl($winAsset['name'], $useProxy, $proxyPrefix, $githubBase, $tag),
             ];
         }
     }
@@ -193,9 +194,9 @@ function fetchSignature(array $assetMap, string $assetName): ?string {
  * 海外 → GitHub 直连
  * 代理不可用时自动降级为直连。
  */
-function assetUrl(string $assetName, bool $useProxy, string $proxyPrefix, string $githubBase): string {
+function assetUrl(string $assetName, bool $useProxy, string $proxyPrefix, string $githubBase, string $tag): string {
     $encoded = urlencode($assetName);
-    $directUrl = $githubBase . $encoded;
+    $directUrl = $githubBase . $tag . '/' . $encoded;
 
     if (!$useProxy) {
         return $directUrl;
