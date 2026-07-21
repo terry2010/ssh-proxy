@@ -8,6 +8,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.VpnKey
@@ -131,6 +132,14 @@ fun SettingsScreen(navController: NavController) {
                 InfoRow(label = "版本", value = "0.1.9")
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
                 InfoRow(label = "开源协议", value = "Apache-2.0")
+            }
+
+            // Logs entry — moved from bottom nav to settings
+            Spacer(Modifier.height(8.dp))
+            SettingsSectionCard(title = "日志", icon = Icons.Filled.Article) {
+                ButtonRow(label = "查看日志") {
+                    navController.navigate("logs")
+                }
             }
         }
     }

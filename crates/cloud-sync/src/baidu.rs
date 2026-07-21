@@ -12,10 +12,20 @@ use crate::{
     CloudProvider, CloudProviderTrait, CloudSyncError, OAuthToken, RemoteFileInfo,
 };
 use serde::Deserialize;
+use std::time::Duration;
 
 /// Baidu API base URLs
 const PCS_BASE: &str = "https://d.pcs.baidu.com";
 const PAN_BASE: &str = "https://pan.baidu.com";
+
+/// Build a reqwest client with timeouts to prevent indefinite hangs.
+fn reqwest_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
 
 /// Baidu provider. No app_key or secret stored in the binary —
 /// all OAuth operations go through the cloud sync proxy server.
@@ -58,7 +68,7 @@ impl CloudProviderTrait for BaiduProvider {
         _code_verifier: &str,
         redirect_uri: &str,
     ) -> Result<OAuthToken, CloudSyncError> {
-        let client = reqwest::Client::new();
+        let client = reqwest_client();
 
         let body = serde_json::json!({
             "provider": "baidu",
@@ -88,7 +98,7 @@ impl CloudProviderTrait for BaiduProvider {
             .as_ref()
             .ok_or(CloudSyncError::TokenExpired)?;
 
-        let client = reqwest::Client::new();
+        let client = reqwest_client();
 
         let body = serde_json::json!({
             "provider": "baidu",
@@ -120,7 +130,7 @@ impl CloudProviderTrait for BaiduProvider {
         data: &[u8],
     ) -> Result<(), CloudSyncError> {
         // Baidu uses a 3-step upload: precreate → upload slices → create
-        let client = reqwest::Client::new();
+        let client = reqwest_client();
         let access_token = &token.access_token;
 
         // Step 1: precreate
@@ -135,12 +145,13 @@ impl CloudProviderTrait for BaiduProvider {
         ];
 
         let precreate_url = format!(
-            "{}/rest/2.0/pcs/file?method=precreate&access_token={}",
-            PAN_BASE, access_token
+            "{}/rest/2.0/pcs/file?method=precreate",
+            PAN_BASE,
         );
 
         let resp = client
             .post(&precreate_url)
+            .header("Authorization", format!("Bearer {}", access_token))
             .form(&precreate_form)
             .send()
             .await?;
@@ -167,8 +178,8 @@ impl CloudProviderTrait for BaiduProvider {
 
         // Step 2: upload single slice (whole file as one slice for small files)
         let upload_url = format!(
-            "{}/rest/2.0/pcs/superfile2?method=upload&access_token={}&type=tmpfile&path={}&uploadid={}&partseq=0",
-            PCS_BASE, access_token,
+            "{}/rest/2.0/pcs/superfile2?method=upload&type=tmpfile&path={}&uploadid={}&partseq=0",
+            PCS_BASE,
             urlencoding::encode(path),
             uploadid
         );
@@ -180,7 +191,11 @@ impl CloudProviderTrait for BaiduProvider {
 
         let form = reqwest::multipart::Form::new().part("file", part);
 
-        let resp = client.post(&upload_url).multipart(form).send().await?;
+        let resp = client
+            .post(&upload_url)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .multipart(form)
+            .send().await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -202,12 +217,13 @@ impl CloudProviderTrait for BaiduProvider {
         ];
 
         let create_url = format!(
-            "{}/rest/2.0/pcs/file?method=create&access_token={}",
-            PAN_BASE, access_token
+            "{}/rest/2.0/pcs/file?method=create",
+            PAN_BASE,
         );
 
         let resp = client
             .post(&create_url)
+            .header("Authorization", format!("Bearer {}", access_token))
             .form(&create_form)
             .send()
             .await?;
@@ -239,15 +255,17 @@ impl CloudProviderTrait for BaiduProvider {
         token: &OAuthToken,
         path: &str,
     ) -> Result<Vec<u8>, CloudSyncError> {
-        let client = reqwest::Client::new();
+        let client = reqwest_client();
         let url = format!(
-            "{}/rest/2.0/pcs/file?method=download&access_token={}&path={}",
+            "{}/rest/2.0/pcs/file?method=download&path={}",
             PCS_BASE,
-            token.access_token,
             urlencoding::encode(path),
         );
 
-        let resp = client.get(&url).send().await?;
+        let resp = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", token.access_token))
+            .send().await?;
 
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(CloudSyncError::NotFound(path.into()));
@@ -271,17 +289,20 @@ impl CloudProviderTrait for BaiduProvider {
         token: &OAuthToken,
         path: &str,
     ) -> Result<RemoteFileInfo, CloudSyncError> {
-        let client = reqwest::Client::new();
+        let client = reqwest_client();
         let url = format!(
-            "{}/rest/2.0/pcs/file?method=meta&access_token={}&path={}",
+            "{}/rest/2.0/pcs/file?method=meta&path={}",
             PAN_BASE,
-            token.access_token,
             urlencoding::encode(path),
         );
 
-        let resp = client.get(&url).send().await?;
+        let resp = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", token.access_token))
+            .send().await?;
 
-        if !resp.status().is_success() {
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
             // File doesn't exist
             return Ok(RemoteFileInfo {
                 exists: false,
@@ -289,6 +310,14 @@ impl CloudProviderTrait for BaiduProvider {
                 hash: None,
                 modified: None,
             });
+        }
+
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(CloudSyncError::Api(format!(
+                "Baidu meta request failed ({}): {}",
+                status, body
+            )));
         }
 
         let meta: BaiduFileMeta = resp.json().await?;
@@ -312,14 +341,15 @@ impl CloudProviderTrait for BaiduProvider {
     }
 
     async fn delete(&self, token: &OAuthToken, path: &str) -> Result<(), CloudSyncError> {
-        let client = reqwest::Client::new();
+        let client = reqwest_client();
         let url = format!(
-            "{}/rest/2.0/pcs/file?method=delete&access_token={}",
-            PAN_BASE, token.access_token,
+            "{}/rest/2.0/pcs/file?method=delete",
+            PAN_BASE,
         );
 
         let resp = client
             .post(&url)
+            .header("Authorization", format!("Bearer {}", token.access_token))
             .form(&[("path", path)])
             .send()
             .await?;

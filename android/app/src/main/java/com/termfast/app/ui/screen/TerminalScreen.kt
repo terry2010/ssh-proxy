@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Tab
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -87,6 +88,11 @@ fun TerminalScreen(navController: NavController, serverId: String, existingSessi
     var showDeleteDialog by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf(sessionState?.name ?: "") }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    // "New terminal created" hint — shown for 3s when this server has >1
+    //   active terminal sessions. Tapping it opens the terminals list.
+    val snackbarHostState = remember { SnackbarHostState() }
+    var hintShown by remember(sessionId) { mutableStateOf(false) }
 
     // Refresh session state periodically
     LaunchedEffect(sessionId) {
@@ -185,6 +191,34 @@ fun TerminalScreen(navController: NavController, serverId: String, existingSessi
 
     // Don't close terminal on dispose — keep it running in background for reuse
 
+    // Detect when this server has >1 active terminals (set hintShown flag).
+    //   Separate from the snackbar display effect so the snackbar coroutine
+    //   isn't cancelled when hintShown flips to true.
+    LaunchedEffect(connected) {
+        if (connected && !hintShown) {
+            val count = TerminalSessionManager.getSessions(serverId).size
+            if (count > 1) {
+                hintShown = true
+            }
+        }
+    }
+
+    // Show the snackbar when hintShown becomes true. This effect only depends
+    //   on hintShown, so it won't be cancelled by connected state changes.
+    LaunchedEffect(hintShown) {
+        if (hintShown) {
+            val count = TerminalSessionManager.getSessions(serverId).size
+            val result = snackbarHostState.showSnackbar(
+                message = "已新建终端，本服务器共 $count 个活跃终端",
+                actionLabel = "查看全部",
+                duration = SnackbarDuration.Short,
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                navController.navigate("terminals/$sessionId")
+            }
+        }
+    }
+
     val terminalBg = Color(0xFF1E1E2E)
     val terminalFg = Color(0xFFCDD6F4)
     val terminalGreen = Color(0xFFA6E3A1)
@@ -199,6 +233,7 @@ fun TerminalScreen(navController: NavController, serverId: String, existingSessi
         useSystemKeyboard = !useSystemKeyboard
     }
 
+    Box(Modifier.fillMaxSize()) {
     if (isLandscape) {
         // Landscape: terminal + keyboard side by side. Keyboard width is fixed
         //   to the short edge so keys keep portrait size. Side is toggleable.
@@ -575,6 +610,17 @@ fun TerminalScreen(navController: NavController, serverId: String, existingSessi
     }
     } // end if-else orientation
 
+    // Snackbar host for "new terminal" hint — placed at top to avoid
+    //   being covered by the custom keyboard at the bottom. Apply status
+    //   bar padding so it's not hidden under the system status bar.
+    SnackbarHost(
+        hostState = snackbarHostState,
+        modifier = Modifier
+            .align(Alignment.TopCenter)
+            .statusBarsPadding(),
+    )
+    } // end Box
+
     // === System IME mode ===
     // Hidden BasicTextField that triggers the system IME. Always present so
     //   focus state survives mode toggles. In system-IME mode it requests
@@ -624,6 +670,15 @@ fun TerminalScreen(navController: NavController, serverId: String, existingSessi
                         MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            ListItem(
+                headlineContent = { Text("所有终端") },
+                leadingContent = { Icon(Icons.Filled.Tab, contentDescription = null, modifier = Modifier.size(24.dp)) },
+                modifier = Modifier.clickable {
+                    showSheet = false
+                    navController.navigate("terminals/$sessionId")
+                },
+            )
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             ListItem(
                 headlineContent = { Text("重命名") },

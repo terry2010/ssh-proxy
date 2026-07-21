@@ -58,7 +58,7 @@ impl CloudProviderTrait for DropboxProvider {
         code_verifier: &str,
         redirect_uri: &str,
     ) -> Result<OAuthToken, CloudSyncError> {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).connect_timeout(std::time::Duration::from_secs(10)).build().unwrap_or_else(|_| reqwest::Client::new());
 
         let body = serde_json::json!({
             "provider": "dropbox",
@@ -91,7 +91,7 @@ impl CloudProviderTrait for DropboxProvider {
             .as_ref()
             .ok_or(CloudSyncError::TokenExpired)?;
 
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).connect_timeout(std::time::Duration::from_secs(10)).build().unwrap_or_else(|_| reqwest::Client::new());
 
         let body = serde_json::json!({
             "provider": "dropbox",
@@ -120,7 +120,7 @@ impl CloudProviderTrait for DropboxProvider {
         path: &str,
         data: &[u8],
     ) -> Result<(), CloudSyncError> {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).connect_timeout(std::time::Duration::from_secs(10)).build().unwrap_or_else(|_| reqwest::Client::new());
         let api_arg = serde_json::json!({
             "path": path,
             "mode": "overwrite",
@@ -157,7 +157,7 @@ impl CloudProviderTrait for DropboxProvider {
         token: &OAuthToken,
         path: &str,
     ) -> Result<Vec<u8>, CloudSyncError> {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).connect_timeout(std::time::Duration::from_secs(10)).build().unwrap_or_else(|_| reqwest::Client::new());
         let api_arg = serde_json::json!({ "path": path });
 
         let resp = client
@@ -194,7 +194,7 @@ impl CloudProviderTrait for DropboxProvider {
         token: &OAuthToken,
         path: &str,
     ) -> Result<RemoteFileInfo, CloudSyncError> {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).connect_timeout(std::time::Duration::from_secs(10)).build().unwrap_or_else(|_| reqwest::Client::new());
 
         let resp = client
             .post(format!("{}/files/get_metadata", API_BASE))
@@ -235,7 +235,7 @@ impl CloudProviderTrait for DropboxProvider {
     }
 
     async fn delete(&self, token: &OAuthToken, path: &str) -> Result<(), CloudSyncError> {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).connect_timeout(std::time::Duration::from_secs(10)).build().unwrap_or_else(|_| reqwest::Client::new());
 
         let resp = client
             .post(format!("{}/files/delete_v2", API_BASE))

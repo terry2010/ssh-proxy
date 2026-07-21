@@ -51,8 +51,9 @@ enum Commands {
         /// Auth method: password or key
         #[arg(long, default_value = "password")]
         auth: String,
-        /// SSH password (only for password auth)
-        #[arg(long)]
+        /// SSH password (only for password auth).
+        /// Better: use TERMFAST_PASSWORD env var to avoid leaking via ps/history.
+        #[arg(long, hide = true, env = "TERMFAST_PASSWORD")]
         password: Option<String>,
         /// SSH key path (only for key auth)
         #[arg(long)]
@@ -66,8 +67,9 @@ enum Commands {
     },
     /// Remove a server
     RemoveServer { server: String },
-    /// Save password credential for a server
-    SetPassword { server: String, password: String },
+    /// Save password credential for a server.
+    /// Password is read from TERMFAST_PASSWORD env var to avoid leaking via ps/history.
+    SetPassword { server: String },
     /// Toggle proxy
     Proxy {
         server: String,
@@ -329,7 +331,12 @@ async fn run_command(cli: &Cli) -> anyhow::Result<()> {
             print_response(&resp, cli.json);
             Ok(())
         }
-        Commands::SetPassword { server, password } => {
+        Commands::SetPassword { server } => {
+            let password = std::env::var("TERMFAST_PASSWORD")
+                .map_err(|_| anyhow::anyhow!(
+                    "TERMFAST_PASSWORD env var not set. \
+                     Set it to avoid leaking the password via process list / shell history."
+                ))?;
             let mut client = DaemonClient::connect().await?;
             let server_id = client.resolve_server_id(server.as_str()).await?;
             let resp = client

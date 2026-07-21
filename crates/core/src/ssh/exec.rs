@@ -95,7 +95,7 @@ pub async fn exec(
             drop(channel);
             Error::Ipc(IpcError::new(
                 ErrorCode::TriggerCommandFailed,
-                format!("command timed out after {}s: {}", timeout_secs, command),
+                format!("command timed out after {}s", timeout_secs),
             ))
         })?;
 

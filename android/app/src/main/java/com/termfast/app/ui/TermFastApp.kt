@@ -6,6 +6,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tab
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -28,11 +29,15 @@ import com.termfast.app.ui.screen.SettingsScreen
 
 sealed class Screen(val route: String, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
     data object Servers : Screen("servers", "服务器", Icons.Filled.Home)
-    data object Logs : Screen("logs", "日志", Icons.Filled.Article)
+    data object Terminals : Screen("terminals", "终端", Icons.Filled.Tab)
     data object Settings : Screen("settings", "设置", Icons.Filled.Settings)
 }
 
-private val screens = listOf(Screen.Servers, Screen.Logs, Screen.Settings)
+// Logs is no longer in the bottom nav, but the route is still used from
+//   SettingsScreen.
+private const val LOGS_ROUTE = "logs"
+
+private val screens = listOf(Screen.Servers, Screen.Terminals, Screen.Settings)
 
 @Composable
 fun TermFastApp() {
@@ -42,9 +47,12 @@ fun TermFastApp() {
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    // Hide bottom nav on terminal screens (immersive mode)
+    // Hide bottom nav on terminal screens (immersive mode).
+    //   Note: "terminals" and "terminals_by_server" routes should KEEP the
+    //   bottom bar, so we match "terminal/" specifically (the actual terminal
+    //   screen routes are "terminal/{serverId}" and "terminal/{serverId}/{sessionId}").
     val currentRoute = current?.route
-    val showBottomBar = currentRoute?.startsWith("terminal") != true
+    val showBottomBar = currentRoute?.startsWith("terminal/") != true
 
     Scaffold(
         bottomBar = {
@@ -90,7 +98,8 @@ fun TermFastApp() {
             modifier = navModifier,
         ) {
             composable(Screen.Servers.route) { ServerListScreen(navController) }
-            composable(Screen.Logs.route) { LogScreen() }
+            composable(Screen.Terminals.route) { com.termfast.app.ui.screen.TerminalsScreen(navController) }
+            composable(LOGS_ROUTE) { LogScreen() }
             composable(Screen.Settings.route) { SettingsScreen(navController) }
             composable("server_detail/{serverId}") { backStack ->
                 val id = backStack.arguments?.getString("serverId") ?: ""
@@ -119,6 +128,14 @@ fun TermFastApp() {
                 val id = backStack.arguments?.getString("serverId") ?: ""
                 val sid = backStack.arguments?.getString("sessionId") ?: ""
                 com.termfast.app.ui.screen.TerminalScreen(navController, id, sid)
+            }
+            composable("terminals/{focusSessionId}") { backStack ->
+                val sid = backStack.arguments?.getString("focusSessionId") ?: ""
+                com.termfast.app.ui.screen.TerminalsScreen(navController, sid)
+            }
+            composable("terminals_by_server/{serverId}") { backStack ->
+                val serverId = backStack.arguments?.getString("serverId") ?: ""
+                com.termfast.app.ui.screen.TerminalsScreen(navController, focusServerId = serverId)
             }
         }
     }

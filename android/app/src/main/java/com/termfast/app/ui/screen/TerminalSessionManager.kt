@@ -283,6 +283,11 @@ object TerminalSessionManager {
     }
 
     @Synchronized
+    fun getAllSessions(): List<SessionState> {
+        return sessions.values.sortedBy { it.createdAt }
+    }
+
+    @Synchronized
     fun hasSessions(serverId: String): Boolean {
         return sessions.values.any { it.serverId == serverId }
     }

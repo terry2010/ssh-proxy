@@ -54,7 +54,7 @@ pub struct EncryptedBlob {
 /// Validate master password strength (§10.1)
 /// ≥12 characters, must contain letters + numbers
 pub fn validate_master_password(password: &str) -> Result<()> {
-    if password.len() < MIN_PASSWORD_LEN {
+    if password.chars().count() < MIN_PASSWORD_LEN {
         return Err(Error::Ipc(IpcError::new(
             ErrorCode::DecryptionFailed,
             format!("password must be at least {} characters", MIN_PASSWORD_LEN),

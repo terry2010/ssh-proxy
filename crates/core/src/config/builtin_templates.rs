@@ -33,8 +33,8 @@ fn firewalld_template() -> TriggerTemplate {
             validation: "1-65535".into(),
         }],
         commands: vec![
-            "firewall-cmd --permanent --add-rich-rule='rule family=\"{{.IPFamily}}\" source address=\"{{.NewIP}}\" port protocol=\"tcp\" port=\"{{.ProtectedPort}}\" accept'".into(),
-            "{{#if OldIP}}firewall-cmd --permanent --remove-rich-rule='rule family=\"{{.IPFamily}}\" source address=\"{{.OldIP}}\" port protocol=\"tcp\" port=\"{{.ProtectedPort}}\" accept' 2>/dev/null{{/if}}".into(),
+            "firewall-cmd --permanent --add-rich-rule=\"rule family=\\\"{{.IPFamily}}\\\" source address=\\\"{{.NewIP}}\\\" port protocol=\\\"tcp\\\" port=\\\"{{.ProtectedPort}}\\\" accept\"".into(),
+            "{{#if OldIP}}firewall-cmd --permanent --remove-rich-rule=\"rule family=\\\"{{.IPFamily}}\\\" source address=\\\"{{.OldIP}}\\\" port protocol=\\\"tcp\\\" port=\\\"{{.ProtectedPort}}\\\" accept\" 2>/dev/null{{/if}}".into(),
             "firewall-cmd --reload".into(),
         ],
         check_target: String::new(),
@@ -122,7 +122,7 @@ fn telegram_notify_template() -> TriggerTemplate {
             },
         ],
         commands: vec![
-            "curl --max-time 8 -s 'https://api.telegram.org/bot{{.TelegramToken}}/sendMessage' --data-urlencode 'chat_id={{.TelegramChatID}}' --data-urlencode 'text=VPS {{.ServerName}} reconnected from {{.NewIP}}'".into(),
+            "curl --max-time 8 -s \"https://api.telegram.org/bot{{.TelegramToken}}/sendMessage\" --data-urlencode \"chat_id={{.TelegramChatID}}\" --data-urlencode \"text=VPS {{.ServerName}} reconnected from {{.NewIP}}\"".into(),
         ],
         check_target: String::new(),
         check_interval: 60,

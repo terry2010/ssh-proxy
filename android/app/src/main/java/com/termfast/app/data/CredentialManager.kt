@@ -3,6 +3,7 @@ package com.termfast.app.data
 import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.termfast.app.BuildConfig
 import com.termfast.app.RustBridge
 
 /**
@@ -57,10 +58,14 @@ object CredentialManager {
     /** Try to unlock using the cached derived key (no user prompt). */
     fun tryCachedUnlock(context: Context): Boolean {
         val cached = prefs(context).getString(KEY_CACHED, null)
-        android.util.Log.i("CredentialManager", "tryCachedUnlock: cached key present=${cached != null}, status=${status()}")
+        if (BuildConfig.DEBUG) {
+            android.util.Log.d("CredentialManager", "tryCachedUnlock: cached key present=${cached != null}")
+        }
         if (cached == null) return false
         val ok = RustBridge.nativeCredentialUnlockWithKey(cached)
-        android.util.Log.i("CredentialManager", "tryCachedUnlock: unlockWithKey result=$ok, status=${status()}")
+        if (BuildConfig.DEBUG) {
+            android.util.Log.d("CredentialManager", "tryCachedUnlock: result=$ok")
+        }
         if (!ok) {
             // Cached key is stale — delete it so user is prompted next time.
             prefs(context).edit().remove(KEY_CACHED).apply()

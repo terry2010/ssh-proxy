@@ -33,25 +33,29 @@ android {
         create("release") {
             storeFile = file("keystores/release.keystore")
             // Read signing passwords from local.properties (gitignored) or
-            // environment variables. Falls back to dev default for local builds.
+            // environment variables. Only fail if a release build is actually
+            //   requested — debug builds should not require signing config.
             val localProps = Properties().also { props ->
                 val localPropsFile = rootProject.file("local.properties")
                 if (localPropsFile.exists()) {
                     props.load(localPropsFile.inputStream())
                 }
             }
+            val isReleaseBuild = gradle.startParameter.taskNames.any {
+                it.contains("Release", ignoreCase = true)
+            }
             storePassword = localProps.getProperty("TERMFAST_STORE_PASSWORD")
                 ?.takeIf { it.isNotBlank() }
                 ?: System.getenv("TERMFAST_STORE_PASSWORD")
-                ?: "termfast"
+                ?: if (isReleaseBuild) error("TERMFAST_STORE_PASSWORD not set in local.properties or env") else "debug-placeholder"
             keyAlias = localProps.getProperty("TERMFAST_KEY_ALIAS")
                 ?.takeIf { it.isNotBlank() }
                 ?: System.getenv("TERMFAST_KEY_ALIAS")
-                ?: "termfast"
+                ?: if (isReleaseBuild) error("TERMFAST_KEY_ALIAS not set in local.properties or env") else "debug-placeholder"
             keyPassword = localProps.getProperty("TERMFAST_KEY_PASSWORD")
                 ?.takeIf { it.isNotBlank() }
                 ?: System.getenv("TERMFAST_KEY_PASSWORD")
-                ?: "termfast"
+                ?: if (isReleaseBuild) error("TERMFAST_KEY_PASSWORD not set in local.properties or env") else "debug-placeholder"
         }
     }
 
@@ -84,6 +88,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {

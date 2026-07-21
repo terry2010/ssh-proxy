@@ -282,9 +282,15 @@ impl EncryptedFileCredentialStore {
             let plaintext_path = self.store.path().with_extension("json");
             let json = serde_json::to_vec_pretty(map)?;
             drop(inner);
-            // Write atomically: temp file + rename
+            // Write atomically: temp file + rename, with 0600 permissions
             let tmp = plaintext_path.with_extension("tmp");
-            std::fs::write(&tmp, json)?;
+            std::fs::write(&tmp, &json)?;
+            // Set restrictive permissions on the temp file before rename
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+            }
             std::fs::rename(&tmp, &plaintext_path)?;
             return Ok(());
         }

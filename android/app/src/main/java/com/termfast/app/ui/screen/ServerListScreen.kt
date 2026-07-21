@@ -301,12 +301,8 @@ fun ServerListScreen(navController: NavController) {
                         },
                         onClick = { navController.navigate("server_detail/${server.id}") },
                         onTerminal = {
-                            val sessions = TerminalSessionManager.getSessions(server.id)
-                            when (sessions.size) {
-                                0 -> navController.navigate("terminal/${server.id}")
-                                1 -> navController.navigate("terminal/${server.id}/${sessions[0].sessionId}")
-                                else -> navController.navigate("server_detail/${server.id}")
-                            }
+                            // Always create a new terminal session
+                            navController.navigate("terminal/${server.id}")
                         },
                         onDelete = {
                             scope.launch {
@@ -511,7 +507,7 @@ private fun ServerCard(
                             tint = MaterialTheme.colorScheme.onPrimary,
                         )
                         Text(
-                            "SSH终端",
+                            "新建SSH终端",
                             color = MaterialTheme.colorScheme.onPrimary,
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Medium,

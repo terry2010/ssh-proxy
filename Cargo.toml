@@ -24,7 +24,7 @@ default-members = [
 exclude = ["spikes/russh-stress"]
 
 [workspace.package]
-version = "0.2.12"
+version = "0.2.13"
 edition = "2021"
 license = "Apache-2.0"
 authors = ["TermFast Contributors"]
@@ -66,7 +66,7 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 sha2 = "0.10"
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 comfy-table = "7"
 
 # Internal crates

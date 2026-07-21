@@ -29,9 +29,16 @@ $proxyPrefix = 'https://gh-proxy.com/'; // 第三方 GitHub 代理（国内加�
 $githubBase = "https://github.com/{$repo}/releases/download/";
 
 // === 获取客户端 IP ===
-$ip = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['HTTP_X_REAL_IP'] ?? $_SERVER['REMOTE_ADDR'] ?? '';
-if (strpos($ip, ',') !== false) {
-    $ip = trim(explode(',', $ip)[0]);
+// Prefer REMOTE_ADDR (set by web server, not spoofable by client).
+// Only fall back to X-Forwarded-For if REMOTE_ADDR is a trusted proxy.
+$remoteAddr = $_SERVER['REMOTE_ADDR'] ?? '';
+$xff = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? '';
+if ($xff !== '') {
+    // Take the last entry in XFF (closest to our trusted proxy)
+    $parts = array_map('trim', explode(',', $xff));
+    $ip = $remoteAddr ?: end($parts);
+} else {
+    $ip = $remoteAddr;
 }
 $useProxy = isCN($ip);
 
@@ -228,6 +235,8 @@ function isProxyAlive(string $proxyPrefix): bool {
         CURLOPT_TIMEOUT => 1,
         CURLOPT_NOBODY => true, // HEAD 请求
         CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+        CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
     ]);
     curl_exec($ch);
     $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);

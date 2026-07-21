@@ -343,6 +343,15 @@ impl FileLogger {
             .create(true)
             .append(true)
             .open(&self.current_file)?;
+        // Ensure 0600 permissions on log files (may contain sensitive info)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                &self.current_file,
+                std::fs::Permissions::from_mode(0o600),
+            );
+        }
         file.write_all(line.as_bytes())?;
         self.current_size
             .fetch_add(line_bytes, std::sync::atomic::Ordering::Relaxed);

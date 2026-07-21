@@ -345,7 +345,25 @@ impl TriggerEngine {
             vars.insert("OldIP".to_string(), ip.clone());
         }
         // Add user parameters (from trigger instance, e.g. ProtectedPort)
+        // Validate each parameter against shell metacharacters before inserting.
         for (k, v) in &trigger.parameters {
+            if let Err(e) = validate_parameter_value(v) {
+                tracing::warn!("trigger parameter {} rejected: {}", k, e);
+                return TriggerExecutionResult {
+                    trigger_id: trigger.id.clone(),
+                    trigger_name: trigger.name.clone(),
+                    success: false,
+                    executed_commands: 0,
+                    total_commands: trigger.commands.len(),
+                    results: vec![CommandResult {
+                        command: format!("parameter validation failed: {}", k),
+                        exit_code: 255,
+                        stdout: String::new(),
+                        stderr: e,
+                        success: false,
+                    }],
+                };
+            }
             vars.insert(k.clone(), v.clone());
         }
         // Add user-defined custom variables (from global config)
@@ -364,7 +382,9 @@ impl TriggerEngine {
 
         for cmd_template in &trigger.commands {
             let rendered = crate::trigger::template::render_template(cmd_template, &vars);
-            tracing::info!("executing trigger command: {}", rendered);
+            // Log without sensitive values (tokens, passwords) to avoid
+            //   persisting secrets to disk via FileLogger.
+            tracing::info!("executing trigger command (template: {})", cmd_template);
 
             match ssh.exec(&rendered, trigger.timeout_secs).await {
                 Ok(exec_result) => {
@@ -436,6 +456,35 @@ impl<'a> Drop for RunningGuard<'a> {
             }
         }
     }
+}
+
+/// Validate a trigger parameter value against shell metacharacters.
+/// Returns Ok(()) if safe, Err(message) if it contains dangerous characters.
+/// This is a baseline check — the template's shell_escape provides the primary
+///   defense, but this catches values that could break out of quoted contexts.
+fn validate_parameter_value(value: &str) -> std::result::Result<(), String> {
+    if value.contains('\0') {
+        return Err("parameter contains null byte".into());
+    }
+    // Reject shell metacharacters that could be dangerous if escaping fails
+    //   or if the value is placed in a quoted context.
+    // Allow: alphanumeric, space, dot, hyphen, underscore, colon, slash, comma, @
+    //   (covers IPs, ports, paths, tokens, chat IDs, server names)
+    for c in value.chars() {
+        if !(c.is_ascii_alphanumeric()
+            || c == ' '
+            || c == '.'
+            || c == '-'
+            || c == '_'
+            || c == ':'
+            || c == '/'
+            || c == ','
+            || c == '@')
+        {
+            return Err(format!("parameter contains disallowed character: {:?}", c));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

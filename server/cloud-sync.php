@@ -43,13 +43,13 @@ function checkRateLimit(): bool {
     $data = [];
     if (file_exists($file)) {
         $raw = file_get_contents($file);
-        $data = array_filter(unserialize($raw) ?: [], fn($t) => $t > $now - $window);
+        $data = array_filter(json_decode($raw, true) ?: [], fn($t) => $t > $now - $window);
     }
     if (count($data) >= $maxRequests) {
         return false;
     }
     $data[] = $now;
-    file_put_contents($file, serialize($data));
+    file_put_contents($file, json_encode($data));
     return true;
 }
 
@@ -98,10 +98,24 @@ try {
  */
 function handleAuthUrl() {
     global $DROPBOX_APP_KEY, $BAIDU_APP_KEY;
-    
+
     $provider = $_GET['provider'] ?? '';
     $redirect_uri = $_GET['redirect_uri'] ?? 'oob';
-    
+
+    // Whitelist provider
+    if (!in_array($provider, ['dropbox', 'baidu'], true)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'invalid provider']);
+        return;
+    }
+
+    // Whitelist redirect_uri — only allow oob and localhost callbacks
+    if ($redirect_uri !== 'oob' && !preg_match('/^https?:\/\/localhost(:\d+)?\//', $redirect_uri)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'invalid redirect_uri']);
+        return;
+    }
+
     if ($provider === 'dropbox') {
         // Dropbox PKCE: code_verifier 由 App 本地生成，code_challenge 由 App 算好传过来
         $code_challenge = $_GET['code_challenge'] ?? '';

@@ -817,7 +817,9 @@ pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeSetEventListener
     _class: JClass,
     listener: JObject,
 ) {
-    // Create a global reference to the listener object so it survives across JNI calls
+    // Create a global reference to the listener object so it survives across JNI calls.
+    // The previous GlobalRef (if any) is dropped automatically, which calls
+    //   DeleteGlobalRef via jni crate's Drop impl.
     let global = env.new_global_ref(listener).ok();
     let mut st = state().lock().unwrap();
     st.event_callback = global;

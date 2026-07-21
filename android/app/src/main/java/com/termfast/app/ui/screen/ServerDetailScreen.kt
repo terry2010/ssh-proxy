@@ -437,55 +437,6 @@ private fun OverviewTab(
             Text(if (hasSessions) "新建 SSH 终端" else "打开 SSH 终端")
         }
 
-        // Active terminal sessions list
-        if (hasSessions) {
-            ElevatedCard(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.elevatedCardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                ),
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        "活跃终端会话",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    terminalSessions.forEachIndexed { idx, session ->
-                        if (idx > 0) HorizontalDivider(
-                            modifier = Modifier.padding(vertical = 6.dp),
-                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f),
-                        )
-                        TerminalSessionRow(
-                            session = session,
-                            index = idx + 1,
-                            onClick = { onOpenSession(session.sessionId) },
-                            onRename = { name ->
-                                TerminalSessionManager.renameSession(session.sessionId, name)
-                                terminalSessions = TerminalSessionManager.getSessions(serverId)
-                            },
-                            onReconnect = {
-                                TerminalSessionManager.reconnectSession(serverId, session.sessionId) {
-                                    terminalSessions = TerminalSessionManager.getSessions(serverId)
-                                }
-                            },
-                            onDisconnect = {
-                                TerminalSessionManager.disconnectSession(session.sessionId)
-                                terminalSessions = TerminalSessionManager.getSessions(serverId)
-                            },
-                            onDelete = {
-                                RustRepository.closeTerminal(session.sessionId)
-                                TerminalSessionManager.closeSessionBySessionId(session.sessionId)
-                                terminalSessions = TerminalSessionManager.getSessions(serverId)
-                            },
-                        )
-                    }
-                }
-            }
-        }
-
         // Status info card
         ElevatedCard(
             modifier = Modifier.fillMaxWidth(),

@@ -111,6 +111,16 @@ pub fn generate_keypair_at(
     ssh_dir: impl AsRef<std::path::Path>,
     server_id: &str,
 ) -> Result<(PathBuf, String, String)> {
+    // Validate server_id to prevent path traversal — only allow [A-Za-z0-9_-]
+    if server_id.is_empty()
+        || !server_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(Error::Ipc(IpcError::new(
+            ErrorCode::InvalidParams,
+            "invalid server_id: only alphanumeric, hyphen, underscore allowed",
+        )));
+    }
+
     let ssh_dir = ssh_dir.as_ref();
     std::fs::create_dir_all(ssh_dir).map_err(Error::Io)?;
 

@@ -8,6 +8,7 @@ use crate::error::{Error, ErrorCode, IpcError, Result};
 use crate::proxy::manager::ChannelManager;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use zeroize::Zeroizing;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -49,7 +50,7 @@ pub struct Socks5Server {
 /// SOCKS5 authentication credentials
 pub struct Socks5Auth {
     pub username: String,
-    pub password: String,
+    pub password: Zeroizing<String>,
 }
 
 impl Socks5Server {
@@ -173,10 +174,11 @@ pub async fn handle_connection(
         socket.read_exact(&mut password).await?;
 
         // Constant-time comparison to prevent timing side-channel on
-        // username/password length and prefix.
-        if !ct_eq(&username, auth.username.as_bytes())
-            || !ct_eq(&password, auth.password.as_bytes())
-        {
+        // username/password length and prefix. Both comparisons are always
+        //   executed (no short-circuit) to avoid leaking which one failed.
+        let user_ok = ct_eq(&username, auth.username.as_bytes());
+        let pass_ok = ct_eq(&password, auth.password.as_bytes());
+        if !user_ok || !pass_ok {
             socket.write_all(&[0x01, 0x01]).await?; // auth failure
             return Err(Error::Other("SOCKS5 auth failed".into()));
         }
@@ -384,21 +386,23 @@ mod tests {
         let mgr = Arc::new(ChannelManager::new(opener, 64, 300));
         let server = Socks5Server::new(1080, mgr).with_auth(Socks5Auth {
             username: "user".into(),
-            password: "pass".into(),
+            password: Zeroizing::new("pass".into()),
         });
         assert!(server.auth.is_some());
     }
 }
 
 /// Constant-time byte slice comparison. Returns true if slices are equal.
-/// Prevents timing side-channels that could leak password length/prefix.
+/// Does NOT short-circuit on length mismatch — always compares the full
+///   shorter slice to avoid leaking length information via timing.
 fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
     let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
+    // XOR length difference so different lengths are detected
+    diff ^= (a.len() as u8).wrapping_sub(b.len() as u8);
+    // Compare up to the shorter length
+    let min_len = a.len().min(b.len());
+    for i in 0..min_len {
+        diff |= a[i] ^ b[i];
     }
     diff == 0
 }

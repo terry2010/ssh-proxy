@@ -50,13 +50,18 @@
       "identifier": "fs:scope",
       "allow": [
         { "path": "$HOME" },
-        { "path": "$HOME/**" },
         { "path": "$DOWNLOAD" },
         { "path": "$DOWNLOAD/**" },
         { "path": "$DOCUMENT" },
         { "path": "$DOCUMENT/**" },
         { "path": "$DESKTOP" },
         { "path": "$DESKTOP/**" }
+      ],
+      "deny": [
+        { "path": "$HOME/.ssh/**" },
+        { "path": "$HOME/.aws/**" },
+        { "path": "$HOME/.gnupg/**" },
+        { "path": "$HOME/.config/termfast/**" }
       ]
     }
   ]

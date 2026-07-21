@@ -111,10 +111,9 @@ class GitHubReleaseUpdater(
     }
 
     /// Verify that a downloaded file's SHA-256 matches the expected digest.
-    /// GitHub Release assets may include a `digest` field (sha256:xxx).
-    /// Returns true if no expected digest is available or if it matches.
+    /// The expected digest MUST be present — fail closed if missing.
     fun verifySha256(result: DownloadResult, expectedDigest: String?): Boolean {
-        if (expectedDigest.isNullOrBlank()) return true
+        if (expectedDigest.isNullOrBlank()) return false  // fail closed
         val expected = expectedDigest.removePrefix("sha256:").trim().lowercase()
         return result.sha256.lowercase() == expected
     }
