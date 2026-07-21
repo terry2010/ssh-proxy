@@ -12,20 +12,34 @@
  *
  * 部署：
  *   1. 放到服务器 /var/www/html/tools/cloud-sync.php
- *   2. Nginx 配置 fastcgi_param 传入环境变量：
- *        fastcgi_param DROPBOX_APP_KEY "xxx";
- *        fastcgi_param DROPBOX_APP_SECRET "xxx";
- *        fastcgi_param BAIDU_APP_KEY "xxx";
- *        fastcgi_param BAIDU_APP_SECRET "xxx";
- *      或在 PHP-FPM pool 配置 env[...] = "..."
+ *   2. 配置 app_key / app_secret，二选一：
+ *      a) 复制 config.local.php.example 为 config.local.php，填入值
+ *         （config.local.php 已在 .gitignore，不会提交）
+ *      b) 或在 Nginx/PHP-FPM 配置环境变量：
+ *           fastcgi_param BAIDU_APP_KEY "xxx";
+ *           fastcgi_param BAIDU_APP_SECRET "xxx";
+ *           fastcgi_param DROPBOX_APP_KEY "xxx";
+ *           fastcgi_param DROPBOX_APP_SECRET "xxx";
+ *      环境变量优先于 config.local.php。
  *   3. 确保 HTTPS（Let's Encrypt 免费证书）
  */
 
-// === 配置：从环境变量读取，不硬编码 ===
-$DROPBOX_APP_KEY    = getenv('DROPBOX_APP_KEY') ?: '';
-$DROPBOX_APP_SECRET = getenv('DROPBOX_APP_SECRET') ?: '';
-$BAIDU_APP_KEY      = getenv('BAIDU_APP_KEY') ?: '';
-$BAIDU_APP_SECRET   = getenv('BAIDU_APP_SECRET') ?: '';
+// === 配置：优先环境变量，其次 server/config.local.php（不提交 git） ===
+$LOCAL_CONFIG = [];
+if (is_file(__DIR__ . '/config.local.php')) {
+    $LOCAL_CONFIG = require __DIR__ . '/config.local.php';
+}
+$get_cfg = static function (string $key) use ($LOCAL_CONFIG): string {
+    $env = getenv($key);
+    if ($env !== false && $env !== '') {
+        return $env;
+    }
+    return $LOCAL_CONFIG[$key] ?? '';
+};
+$DROPBOX_APP_KEY    = $get_cfg('DROPBOX_APP_KEY');
+$DROPBOX_APP_SECRET = $get_cfg('DROPBOX_APP_SECRET');
+$BAIDU_APP_KEY      = $get_cfg('BAIDU_APP_KEY');
+$BAIDU_APP_SECRET   = $get_cfg('BAIDU_APP_SECRET');
 
 // === 安全响应头 (L-2) ===
 header('X-Content-Type-Options: nosniff');

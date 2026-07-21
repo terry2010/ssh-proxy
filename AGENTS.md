@@ -187,9 +187,13 @@ pub const CLOUD_SYNC_SERVER: &str = "https://termfast.xisj.com/tools/cloud-sync.
 
 **服务器部署**：
 1. 将 `server/cloud-sync.php` 部署到服务器
-2. 在 Nginx/PHP-FPM 中配置环境变量：
-   - `DROPBOX_APP_KEY`, `DROPBOX_APP_SECRET`
-   - `BAIDU_APP_KEY`, `BAIDU_APP_SECRET`
+2. 配置 app_key / app_secret，二选一：
+   - **推荐**：复制 `server/config.local.php.example` 为 `server/config.local.php`，填入值
+     （`config.local.php` 已在 `.gitignore`，不会提交；文件权限建议 `chmod 640`）
+   - 或在 Nginx/PHP-FPM 中配置环境变量：
+     - `DROPBOX_APP_KEY`, `DROPBOX_APP_SECRET`
+     - `BAIDU_APP_KEY`, `BAIDU_APP_SECRET`
+   - 环境变量优先于 `config.local.php`
 3. 确保 HTTPS
 
 **百度网盘**：使用 Authorization Code flow（通过服务器），有 refresh_token（10年有效），可自动续期。
