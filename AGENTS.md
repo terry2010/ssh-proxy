@@ -304,8 +304,8 @@ cd android
 
 **Release 签名：**
 
-- Keystore: `android/app/keystores/release.keystore`
-- Alias: `termfast`，密码: `termfast`
+- Keystore: `android/app/keystores/release.keystore`（未入库，通过 `ANDROID_KEYSTORE_BASE64` Secret 在 CI 中还原）
+- Alias / 密码：见密码管理器，不要写入代码或文档
 - 签名配置在 `android/app/build.gradle.kts` 的 `signingConfigs.release`
 - ProGuard keep 规则在 `android/app/proguard-rules.pro`
 
