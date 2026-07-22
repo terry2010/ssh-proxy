@@ -24,6 +24,23 @@ const KEYCHAIN_ENTRY: &str = "credential_master_key";
 /// Outer Option = whether we've queried yet; inner Option = the key value.
 static CACHED_KEYCHAIN_KEY: Mutex<Option<Option<termfast_credential::DerivedKey>>> = Mutex::new(None);
 
+/// In-memory cache of the master password (plaintext), so that cloud sync
+/// can reuse it without asking the user to type it again. The password is
+/// cleared on lock / reset. This is safe because it never touches disk.
+static CACHED_MASTER_PASSWORD: Mutex<Option<String>> = Mutex::new(None);
+
+/// Get the cached master password, if the credential store is currently unlocked.
+pub fn cached_master_password() -> Option<String> {
+    CACHED_MASTER_PASSWORD.lock().ok().and_then(|g| g.clone())
+}
+
+/// Clear the cached master password (called on lock / reset).
+fn clear_cached_master_password() {
+    if let Ok(mut g) = CACHED_MASTER_PASSWORD.lock() {
+        *g = None;
+    }
+}
+
 /// Tauri-managed state holding the encrypted credential store.
 pub struct CredentialState {
     pub store: Arc<EncryptedFileCredentialStore>,
@@ -199,6 +216,7 @@ pub async fn ipc_initialize_credentials(
     master_password: String,
 ) -> Result<(), String> {
     let store = state.store.clone();
+    let pw_for_cache = master_password.clone();
     // Argon2id is CPU-intensive — run on blocking pool to avoid stalling
     // the async executor and freezing the UI.
     tauri::async_runtime::spawn_blocking(move || {
@@ -210,6 +228,10 @@ pub async fn ipc_initialize_credentials(
     if let Some(key) = state.store.derived_key() {
         save_cached_key(&key);
     }
+    // Cache the master password in memory for cloud sync reuse.
+    if let Ok(mut g) = CACHED_MASTER_PASSWORD.lock() {
+        *g = Some(pw_for_cache);
+    }
     Ok(())
 }
 
@@ -219,6 +241,7 @@ pub async fn ipc_unlock_credentials(
     master_password: String,
 ) -> Result<(), String> {
     let store = state.store.clone();
+    let pw_for_cache = master_password.clone();
     tauri::async_runtime::spawn_blocking(move || {
         store.unlock(&master_password).map_err(|e| e.to_string())
     })
@@ -227,6 +250,10 @@ pub async fn ipc_unlock_credentials(
     // Cache the derived key for future auto-unlock.
     if let Some(key) = state.store.derived_key() {
         save_cached_key(&key);
+    }
+    // Cache the master password in memory for cloud sync reuse.
+    if let Ok(mut g) = CACHED_MASTER_PASSWORD.lock() {
+        *g = Some(pw_for_cache);
     }
     Ok(())
 }
@@ -268,6 +295,7 @@ pub async fn ipc_try_cached_unlock(
 pub async fn ipc_lock_credentials(state: State<'_, CredentialState>) -> Result<(), String> {
     state.store.lock();
     delete_cached_key();
+    clear_cached_master_password();
     Ok(())
 }
 
@@ -277,6 +305,7 @@ pub async fn ipc_migrate_credentials(
     master_password: String,
 ) -> Result<(), String> {
     let store = state.store.clone();
+    let pw_for_cache = master_password.clone();
     tauri::async_runtime::spawn_blocking(move || {
         store.migrate(&master_password).map_err(|e| e.to_string())
     })
@@ -284,6 +313,9 @@ pub async fn ipc_migrate_credentials(
     .map_err(|e| e.to_string())??;
     if let Some(key) = state.store.derived_key() {
         save_cached_key(&key);
+    }
+    if let Ok(mut g) = CACHED_MASTER_PASSWORD.lock() {
+        *g = Some(pw_for_cache);
     }
     Ok(())
 }
@@ -295,6 +327,7 @@ pub async fn ipc_change_credential_password(
     new_password: String,
 ) -> Result<(), String> {
     let store = state.store.clone();
+    let pw_for_cache = new_password.clone();
     tauri::async_runtime::spawn_blocking(move || {
         store
             .change_password(&old_password, &new_password)
@@ -305,6 +338,10 @@ pub async fn ipc_change_credential_password(
     // Update the cached key in OS keychain.
     if let Some(key) = state.store.derived_key() {
         save_cached_key(&key);
+    }
+    // Update the cached master password for cloud sync reuse.
+    if let Ok(mut g) = CACHED_MASTER_PASSWORD.lock() {
+        *g = Some(pw_for_cache);
     }
     Ok(())
 }
@@ -318,6 +355,7 @@ pub async fn ipc_reset_credentials(state: State<'_, CredentialState>) -> Result<
     .await
     .map_err(|e| e.to_string())??;
     delete_cached_key();
+    clear_cached_master_password();
     Ok(())
 }
 

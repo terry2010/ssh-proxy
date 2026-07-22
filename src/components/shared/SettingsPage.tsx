@@ -27,9 +27,6 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
   );
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const isScrollingRef = useRef(false);
-  // Cache master password when user unlocks credential store, so cloud sync
-  // section can reuse it without asking the user to type it again.
-  const [cachedMasterPassword, setCachedMasterPassword] = useState("");
 
   const tabs: { id: TabId; label: string }[] = [
     { id: "general", label: t("settings.general.title") },
@@ -157,14 +154,14 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
                 sectionRefs.current.credentials = el;
               }}
             >
-              <CredentialSection onUnlockPassword={setCachedMasterPassword} />
+              <CredentialSection />
             </div>
             <div
               ref={(el) => {
                 sectionRefs.current.cloud_sync = el;
               }}
             >
-              <CloudSyncSection cachedMasterPassword={cachedMasterPassword} />
+              <CloudSyncSection />
             </div>
             <div
               ref={(el) => {
@@ -605,7 +602,7 @@ const APP_VERSION = "0.1.0";
 
 // === CREDENTIAL SECTION ===
 
-function CredentialSection({ onUnlockPassword }: { onUnlockPassword?: (pw: string) => void }) {
+function CredentialSection() {
   const { t } = useTranslation();
   const [credStatus, setCredStatus] = useState<string>("pending");
   const [showSetup, setShowSetup] = useState(false);
@@ -638,7 +635,6 @@ function CredentialSection({ onUnlockPassword }: { onUnlockPassword?: (pw: strin
       await ipcInvoke("ipc_initialize_credentials", { masterPassword: setupPw });
       toast.success(t("credentials.setup_title"));
       setShowSetup(false);
-      onUnlockPassword?.(setupPw);
       setSetupPw("");
       setSetupConfirmPw("");
       refreshStatus();
@@ -647,7 +643,7 @@ function CredentialSection({ onUnlockPassword }: { onUnlockPassword?: (pw: strin
     } finally {
       setBusy(false);
     }
-  }, [setupPw, setupConfirmPw, t, refreshStatus, onUnlockPassword]);
+  }, [setupPw, setupConfirmPw, t, refreshStatus]);
 
   const handleUnlock = useCallback(async () => {
     if (!unlockPw) return;
@@ -656,7 +652,6 @@ function CredentialSection({ onUnlockPassword }: { onUnlockPassword?: (pw: strin
       await ipcInvoke("ipc_unlock_credentials", { masterPassword: unlockPw });
       toast.success(t("credentials.unlock_button"));
       setShowUnlock(false);
-      onUnlockPassword?.(unlockPw);
       setUnlockPw("");
       refreshStatus();
     } catch (e: any) {
@@ -1058,24 +1053,16 @@ function CredentialSection({ onUnlockPassword }: { onUnlockPassword?: (pw: strin
 
 // === Cloud Sync Section ===
 
-function CloudSyncSection({ cachedMasterPassword }: { cachedMasterPassword?: string }) {
+function CloudSyncSection() {
   const { t } = useTranslation();
   const [provider, setProvider] = useState<"dropbox" | "baidu">("baidu");
-  // If user already unlocked credential store, reuse that password.
-  const [masterPassword, setMasterPassword] = useState(cachedMasterPassword ?? "");
-  // Keep masterPassword in sync when cachedMasterPassword changes (e.g. user
-  // unlocks after CloudSyncSection has mounted).
-  useEffect(() => {
-    if (cachedMasterPassword) setMasterPassword(cachedMasterPassword);
-  }, [cachedMasterPassword]);
+  // masterPassword is no longer needed in the frontend — the backend caches
+  // it when the credential store is unlocked and uses it automatically.
   const [syncPath, setSyncPath] = useState("");
   const [isAuthed, setIsAuthed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [waiting, setWaiting] = useState(false);
-  const [showPasswordWarn, setShowPasswordWarn] = useState(false);
-  const [pendingAction, setPendingAction] = useState<"upload" | "download" | null>(null);
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
-  const [showForgotPassword, setShowForgotPassword] = useState(false);
 
   const checkAuth = async () => {
     try {
@@ -1124,18 +1111,14 @@ function CloudSyncSection({ cachedMasterPassword }: { cachedMasterPassword?: str
   };
 
   const upload = async () => {
-    if (!masterPassword) {
-      setPendingAction("upload");
-      setShowPasswordWarn(true);
-      return;
-    }
     setBusy(true);
     try {
-      // Try upload, if token expired try refresh then retry
+      // Try upload, if token expired try refresh then retry.
+      // master_password is omitted — backend uses cached password from
+      // credential store unlock.
       try {
         await ipcInvoke("ipc_cloud_sync_upload", {
           provider,
-          master_password: masterPassword,
           sync_path: syncPath || undefined,
         });
       } catch (e) {
@@ -1143,7 +1126,6 @@ function CloudSyncSection({ cachedMasterPassword }: { cachedMasterPassword?: str
           await ipcInvoke("ipc_cloud_sync_refresh_token", { provider });
           await ipcInvoke("ipc_cloud_sync_upload", {
             provider,
-            master_password: masterPassword,
             sync_path: syncPath || undefined,
           });
         } else {
@@ -1159,11 +1141,6 @@ function CloudSyncSection({ cachedMasterPassword }: { cachedMasterPassword?: str
   };
 
   const download = async () => {
-    if (!masterPassword) {
-      setPendingAction("download");
-      setShowPasswordWarn(true);
-      return;
-    }
     setBusy(true);
     try {
       let res: { blob: string; size: number };
@@ -1183,9 +1160,8 @@ function CloudSyncSection({ cachedMasterPassword }: { cachedMasterPassword?: str
           throw e;
         }
       }
-      // Import the downloaded blob
+      // Import the downloaded blob (master_password omitted — backend uses cache)
       await ipcInvoke("ipc_import_full", {
-        master_password: masterPassword,
         blob: res.blob,
       });
       toast.success(t("settings.cloud_sync.download_success"));
@@ -1310,67 +1286,7 @@ function CloudSyncSection({ cachedMasterPassword }: { cachedMasterPassword?: str
               {t("settings.cloud_sync.disconnect")}
             </button>
           </div>
-
-          {/* Master password row: label + input + save + forgot */}
-          <div className="flex items-center gap-2">
-            <label className="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
-              {t("settings.cloud_sync.master_password")}
-            </label>
-            <input
-              type="password"
-              value={masterPassword}
-              onChange={(e) => setMasterPassword(e.target.value)}
-              placeholder={t("settings.cloud_sync.master_password_placeholder")}
-              className="flex-1 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm"
-            />
-            <button
-              onClick={() => {
-                if (masterPassword) {
-                  toast.success(t("settings.cloud_sync.password_saved"));
-                }
-              }}
-              disabled={!masterPassword}
-              className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 disabled:opacity-50 whitespace-nowrap"
-            >
-              {t("settings.cloud_sync.save")}
-            </button>
-            <button
-              onClick={() => setShowForgotPassword(true)}
-              className="text-sm text-blue-500 hover:text-blue-600 whitespace-nowrap"
-            >
-              {t("settings.cloud_sync.forgot_password")}
-            </button>
-          </div>
         </div>
-      )}
-
-      {/* Master password warning modal */}
-      {showPasswordWarn && (
-        <Modal
-          title={t("settings.cloud_sync.password_required_title")}
-          onClose={() => setShowPasswordWarn(false)}
-        >
-          <div className="p-6 space-y-4">
-            <h3 className="text-lg font-semibold text-red-600">
-              {t("settings.cloud_sync.password_required_title")}
-            </h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              {t("settings.cloud_sync.password_required_desc", {
-                action: pendingAction === "upload"
-                  ? t("settings.cloud_sync.upload")
-                  : t("settings.cloud_sync.download"),
-              })}
-            </p>
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => setShowPasswordWarn(false)}
-                className="px-4 py-2 rounded-lg bg-blue-500 text-white text-sm font-medium hover:bg-blue-600"
-              >
-                {t("common.ok")}
-              </button>
-            </div>
-          </div>
-        </Modal>
       )}
 
       {/* Disconnect confirmation modal */}
@@ -1405,27 +1321,6 @@ function CloudSyncSection({ cachedMasterPassword }: { cachedMasterPassword?: str
         </Modal>
       )}
 
-      {/* Forgot password modal */}
-      {showForgotPassword && (
-        <Modal
-          title={t("settings.cloud_sync.forgot_password_title")}
-          onClose={() => setShowForgotPassword(false)}
-        >
-          <div className="p-6 space-y-4">
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              {t("settings.cloud_sync.forgot_password_desc")}
-            </p>
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => setShowForgotPassword(false)}
-                className="px-4 py-2 rounded-lg bg-blue-500 text-white text-sm font-medium hover:bg-blue-600"
-              >
-                {t("common.ok")}
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
     </section>
   );
 }

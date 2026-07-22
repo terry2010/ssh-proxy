@@ -1038,9 +1038,12 @@ async fn ipc_export_full(
 #[tauri::command]
 async fn ipc_import_full(
     state: tauri::State<'_, AppState>,
-    master_password: String,
+    master_password: Option<String>,
     blob: String,
 ) -> Result<serde_json::Value, String> {
+    let master_password = master_password
+        .or_else(crate::credential_manager::cached_master_password)
+        .ok_or_else(|| "master password not available — unlock credential store first".to_string())?;
     forward_to_daemon(
         &state,
         termfast_daemon::proto::Action::ImportFull,
@@ -1267,9 +1270,14 @@ async fn ipc_cloud_sync_load_token(
 async fn ipc_cloud_sync_upload(
     state: tauri::State<'_, AppState>,
     provider: String,
-    master_password: String,
+    master_password: Option<String>,
     sync_path: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    // Use provided password, or fall back to cached master password from
+    // credential store unlock (so user doesn't need to type it again).
+    let master_password = master_password
+        .or_else(crate::credential_manager::cached_master_password)
+        .ok_or_else(|| "master password not available — unlock credential store first".to_string())?;
     let mut params = serde_json::json!({
         "provider": provider,
         "master_password": master_password,
@@ -1289,9 +1297,16 @@ async fn ipc_cloud_sync_upload(
 async fn ipc_cloud_sync_download(
     state: tauri::State<'_, AppState>,
     provider: String,
+    master_password: Option<String>,
     sync_path: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let mut params = serde_json::json!({ "provider": provider });
+    let master_password = master_password
+        .or_else(crate::credential_manager::cached_master_password)
+        .ok_or_else(|| "master password not available — unlock credential store first".to_string())?;
+    let mut params = serde_json::json!({
+        "provider": provider,
+        "master_password": master_password,
+    });
     if let Some(sp) = sync_path {
         params["sync_path"] = serde_json::json!(sp);
     }
