@@ -165,7 +165,7 @@ impl CloudProviderTrait for BaiduProvider {
         ];
 
         let precreate_url = format!(
-            "{}/rest/2.0/pcs/file?method=precreate",
+            "{}/rest/2.0/xpan/file?method=precreate",
             PAN_BASE,
         );
 
@@ -237,7 +237,7 @@ impl CloudProviderTrait for BaiduProvider {
         ];
 
         let create_url = format!(
-            "{}/rest/2.0/pcs/file?method=create",
+            "{}/rest/2.0/xpan/file?method=create",
             PAN_BASE,
         );
 
@@ -313,7 +313,7 @@ impl CloudProviderTrait for BaiduProvider {
         let path = baidu_path(path);
         let client = reqwest_client();
         let url = format!(
-            "{}/rest/2.0/pcs/file?method=meta&path={}",
+            "{}/rest/2.0/xpan/multimedia?method=meta&path={}",
             PAN_BASE,
             urlencoding::encode(&path),
         );
@@ -366,7 +366,7 @@ impl CloudProviderTrait for BaiduProvider {
         let path = baidu_path(path);
         let client = reqwest_client();
         let url = format!(
-            "{}/rest/2.0/pcs/file?method=delete",
+            "{}/rest/2.0/xpan/file?method=delete",
             PAN_BASE,
         );
 
