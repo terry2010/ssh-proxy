@@ -1523,43 +1523,43 @@ fn create_tray_icon(_color: termfast_desktop::tray::TrayIconColor) -> tauri::ima
     }
 
     // Draw ">_" prompt and cursor block — thick (4px) lines
-    // Centered within the border with generous padding
+    // Centered within the border with generous padding (2x previous)
     //
     // ">" chevron: 4px thick
-    //   Upper arm: (7,10) → (13,16)
-    //   Lower arm: (13,16) → (7,22)
-    // "_" underline: 4px thick
-    //   x: 16..21, y: 22..26
-    // Cursor block: solid rectangle, height 14
-    //   x: 24..28, y: 10..24
+    //   Upper arm: (9,12) → (14,17)
+    //   Lower arm: (14,17) → (9,22)
+    // "_" underline: 6px thick (wider bar)
+    //   x: 17..22, y: 21..27
+    // Cursor block: square 8x8
+    //   x: 24..32 → clamp to 24..30, y: 12..20
 
-    // Draw ">" upper arm: from (7,10) to (13,16), 4px thick
-    for i in 0..=6 {
-        let px = 7 + i;
-        let py = 10 + i;
+    // Draw ">" upper arm: from (9,12) to (14,17), 4px thick
+    for i in 0..=5 {
+        let px = 9 + i;
+        let py = 12 + i;
         for t in 0..4 {
             set_pixel(&mut rgba, px + t, py);
         }
     }
-    // Draw ">" lower arm: from (13,16) to (7,22), 4px thick
-    for i in 0..=6 {
-        let px = 13 - i;
-        let py = 16 + i;
+    // Draw ">" lower arm: from (14,17) to (9,22), 4px thick
+    for i in 0..=5 {
+        let px = 14 - i;
+        let py = 17 + i;
         for t in 0..4 {
             set_pixel(&mut rgba, px + t, py);
         }
     }
 
-    // Draw "_" — thick horizontal bar
-    for px in 16..21 {
-        for py in 22..26 {
+    // Draw "_" — very thick horizontal bar (6px)
+    for px in 17..22 {
+        for py in 21..27 {
             set_pixel(&mut rgba, px, py);
         }
     }
 
-    // Draw cursor block — solid rectangle, height 14
-    for py in 10..24 {
-        for px in 24..28 {
+    // Draw cursor block — square 8x8
+    for py in 12..20 {
+        for px in 24..30 {
             set_pixel(&mut rgba, px, py);
         }
     }
