@@ -1299,6 +1299,7 @@ async fn ipc_cloud_sync_download(
     provider: String,
     master_password: Option<String>,
     sync_path: Option<String>,
+    force_download: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     let master_password = master_password
         .or_else(crate::credential_manager::cached_master_password)
@@ -1309,6 +1310,9 @@ async fn ipc_cloud_sync_download(
     });
     if let Some(sp) = sync_path {
         params["sync_path"] = serde_json::json!(sp);
+    }
+    if let Some(fd) = force_download {
+        params["force_download"] = serde_json::json!(fd);
     }
     forward_to_daemon(
         &state,

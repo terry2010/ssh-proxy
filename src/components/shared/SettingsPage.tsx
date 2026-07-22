@@ -1153,19 +1153,18 @@ function CloudSyncSection() {
     }
   };
 
-  const download = async (masterPassword?: string) => {
+  const download = async (masterPassword?: string, forceDownload = false) => {
     setBusy(true);
     try {
-      let res: { blob: string; size: number };
+      let res: { blob?: string; size?: number; ok?: boolean; reason?: string; message?: string; cloud_updated_at?: string; local_updated_at?: string };
       try {
-        res = await ipcInvoke<{ blob: string; size: number }>(
+        res = await ipcInvoke<{ blob?: string; size?: number; ok?: boolean; reason?: string; message?: string; cloud_updated_at?: string; local_updated_at?: string }>(
           "ipc_cloud_sync_download",
-          { provider, sync_path: syncPath || undefined, master_password: masterPassword },
+          { provider, sync_path: syncPath || undefined, master_password: masterPassword, force_download: forceDownload },
         );
       } catch (e) {
         const msg = String(e);
         if (msg.includes("master password not available")) {
-          // Cached password not available — prompt user to enter it
           setPendingAction("download");
           setPwPromptText("");
           setShowPwPrompt(true);
@@ -1173,13 +1172,49 @@ function CloudSyncSection() {
         }
         if (msg.includes("expired") || msg.includes("401")) {
           await ipcInvoke("ipc_cloud_sync_refresh_token", { provider });
-          res = await ipcInvoke<{ blob: string; size: number }>(
+          res = await ipcInvoke<{ blob?: string; size?: number; ok?: boolean; reason?: string; message?: string; cloud_updated_at?: string; local_updated_at?: string }>(
             "ipc_cloud_sync_download",
-            { provider, sync_path: syncPath || undefined, master_password: masterPassword },
+            { provider, sync_path: syncPath || undefined, master_password: masterPassword, force_download: forceDownload },
           );
         } else {
           throw e;
         }
+      }
+      // Handle special responses (no_update, local_newer, no_remote_data, decrypt_failed)
+      if (res.ok === false && res.reason) {
+        if (res.reason === "local_newer") {
+          // Local data is newer than cloud — ask user to confirm overwrite
+          const cloudTime = res.cloud_updated_at || "?";
+          const localTime = res.local_updated_at || "?";
+          if (window.confirm(
+            `本地数据比云端新，下载将覆盖本地最近改动，此操作不可撤销。\n\n云端时间：${cloudTime}\n本地时间：${localTime}\n\n确定要继续下载吗？`
+          )) {
+            // User confirmed — retry with force_download=true
+            setBusy(false);
+            await download(masterPassword, true);
+            return;
+          } else {
+            setBusy(false);
+            return;
+          }
+        } else if (res.reason === "no_update") {
+          toast.info("云端数据与本地一致，无需下载");
+          setBusy(false);
+          return;
+        } else if (res.reason === "no_remote_data") {
+          toast.error("云端没有同步数据");
+          setBusy(false);
+          return;
+        } else if (res.reason === "decrypt_failed") {
+          toast.error("解密失败，主密码与云端不一致或数据损坏");
+          setBusy(false);
+          return;
+        } else {
+          throw new Error(res.message || res.reason);
+        }
+      }
+      if (!res.blob) {
+        throw new Error("download response missing blob");
       }
       await ipcInvoke("ipc_import_full", {
         blob: res.blob,
