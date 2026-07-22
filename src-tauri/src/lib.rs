@@ -1488,12 +1488,12 @@ fn create_tray_icon(_color: termfast_desktop::tray::TrayIconColor) -> tauri::ima
         }
     };
 
-    // Draw rounded square border — 1px thick, 2px inset
-    // Outer bounds: (2,2) to (29,29), corner radius = 4
-    let lo = 2i32;
-    let hi = 29i32;
-    let cr = 4i32;
-    let span = hi - lo; // 27
+    // Draw rounded square border — 1px thick, 1px inset
+    // Outer bounds: (1,1) to (30,30), corner radius = 7
+    let lo = 1i32;
+    let hi = 30i32;
+    let cr = 7i32;
+    let span = hi - lo; // 29
 
     for y in lo..=hi {
         for x in lo..=hi {
@@ -1522,42 +1522,43 @@ fn create_tray_icon(_color: termfast_desktop::tray::TrayIconColor) -> tauri::ima
         }
     }
 
-    // Draw ">_" prompt and cursor block — thick (4px) lines, spread out
+    // Draw ">_" prompt and cursor block — thick (4px) lines
+    // Centered within the border with generous padding
     //
     // ">" chevron: 4px thick
-    //   Upper arm: (5,8) → (12,15)
-    //   Lower arm: (12,15) → (5,22)
+    //   Upper arm: (7,10) → (13,16)
+    //   Lower arm: (13,16) → (7,22)
     // "_" underline: 4px thick
-    //   x: 15..21, y: 22..26
+    //   x: 16..21, y: 22..26
     // Cursor block: solid rectangle, height 14
-    //   x: 24..28, y: 9..23
+    //   x: 24..28, y: 10..24
 
-    // Draw ">" upper arm: from (5,8) to (12,15), 4px thick
-    for i in 0..=7 {
-        let px = 5 + i;
-        let py = 8 + i;
+    // Draw ">" upper arm: from (7,10) to (13,16), 4px thick
+    for i in 0..=6 {
+        let px = 7 + i;
+        let py = 10 + i;
         for t in 0..4 {
             set_pixel(&mut rgba, px + t, py);
         }
     }
-    // Draw ">" lower arm: from (12,15) to (5,22), 4px thick
-    for i in 0..=7 {
-        let px = 12 - i;
-        let py = 15 + i;
+    // Draw ">" lower arm: from (13,16) to (7,22), 4px thick
+    for i in 0..=6 {
+        let px = 13 - i;
+        let py = 16 + i;
         for t in 0..4 {
             set_pixel(&mut rgba, px + t, py);
         }
     }
 
     // Draw "_" — thick horizontal bar
-    for px in 15..21 {
+    for px in 16..21 {
         for py in 22..26 {
             set_pixel(&mut rgba, px, py);
         }
     }
 
     // Draw cursor block — solid rectangle, height 14
-    for py in 9..23 {
+    for py in 10..24 {
         for px in 24..28 {
             set_pixel(&mut rgba, px, py);
         }
