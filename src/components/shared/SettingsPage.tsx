@@ -4,6 +4,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
+import { getVersion } from "@tauri-apps/api/app";
 import { useConfigStore } from "@/stores/configStore";
 import { ipcInvoke } from "@/hooks/useIpc";
 import type { SupportedLanguage } from "@/i18n/config";
@@ -477,6 +478,11 @@ function NotificationSection() {
 function AboutSection() {
   const { t } = useTranslation();
   const [checking, setChecking] = useState(false);
+  const [appVersion, setAppVersion] = useState("");
+
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => setAppVersion("0.2.17"));
+  }, []);
 
   const handleCheck = async () => {
     if (checking) return;
@@ -512,7 +518,7 @@ function AboutSection() {
                 TermFast
               </div>
               <div className="text-xs text-gray-500 dark:text-gray-400">
-                v{APP_VERSION}
+                v{appVersion || "..."}
               </div>
             </div>
           </div>
@@ -597,8 +603,6 @@ function promptInstallUpdate(
     },
   );
 }
-
-const APP_VERSION = "0.1.0";
 
 // === CREDENTIAL SECTION ===
 

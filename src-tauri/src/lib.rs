@@ -1469,29 +1469,53 @@ async fn ipc_cloud_sync_wait_callback(
     .await
 }
 
-/// Create a tray icon image based on color
-fn create_tray_icon(color: termfast_desktop::tray::TrayIconColor) -> tauri::image::Image<'static> {
-    // Generate a simple 22x22 colored circle as PNG
-    let (r, g, b) = match color {
-        termfast_desktop::tray::TrayIconColor::Green => (34, 197, 94),
-        termfast_desktop::tray::TrayIconColor::Yellow => (234, 179, 8),
-        termfast_desktop::tray::TrayIconColor::Red => (239, 68, 68),
-        termfast_desktop::tray::TrayIconColor::Gray => (107, 114, 128),
-    };
-
-    // Create a simple 22x22 RGBA image with a filled circle
-    let size = 22u32;
+/// Create a tray icon image — a blue rounded square with a white "T".
+/// 32x32 RGBA, suitable for system tray on macOS/Windows/Linux.
+fn create_tray_icon(_color: termfast_desktop::tray::TrayIconColor) -> tauri::image::Image<'static> {
+    let size = 32u32;
     let mut rgba = Vec::with_capacity((size * size * 4) as usize);
     let center = (size / 2) as i32;
-    let radius = (size / 2 - 2) as i32;
+    let radius = 13i32; // rounded square half-size
+    let corner = 4i32;  // rounded corner radius
+
+    // Blue background (#2563eb) with white "T" letter
+    let bg = [37u8, 99, 235, 255];
+    let fg = [255u8, 255, 255, 255];
+    let transparent = [0u8, 0, 0, 0];
+
     for y in 0..size as i32 {
         for x in 0..size as i32 {
+            // Rounded square: inside if within radius and corners are rounded
             let dx = x - center;
             let dy = y - center;
-            if dx * dx + dy * dy <= radius * radius {
-                rgba.extend_from_slice(&[r, g, b, 255]);
+            let in_square = dx.abs() <= radius && dy.abs() <= radius;
+            // Check rounded corners
+            let corner_ok = if in_square {
+                let cx = if dx >= 0 { radius - corner } else { -radius + corner };
+                let cy = if dy >= 0 { radius - corner } else { -radius + corner };
+                let ddx = (dx - cx).max(0);
+                let ddy = (dy - cy).max(0);
+                ddx * ddx + ddy * ddy <= corner * corner
             } else {
-                rgba.extend_from_slice(&[0, 0, 0, 0]);
+                false
+            };
+
+            if !corner_ok {
+                rgba.extend_from_slice(&transparent);
+                continue;
+            }
+
+            // Draw "T" letter: vertical bar + horizontal bar
+            let bar_w = 2i32;  // half-width of bars
+            let top_h = 3i32;  // horizontal bar half-height
+            let stem_h = 9i32; // vertical bar half-height
+            let is_t = (dy >= -radius + 3 && dy <= -radius + 3 + top_h * 2 && dx.abs() <= bar_w + 6)
+                || (dy.abs() <= stem_h && dx.abs() <= bar_w);
+
+            if is_t {
+                rgba.extend_from_slice(&fg);
+            } else {
+                rgba.extend_from_slice(&bg);
             }
         }
     }

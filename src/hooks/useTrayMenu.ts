@@ -60,25 +60,7 @@ export function useTrayMenu() {
 
       const items: (MenuItem | PredefinedMenuItem)[] = [];
 
-      // Connect / Disconnect
-      items.push(
-        await MenuItem.new({
-          text: isConnected ? t("server.disconnect") : t("server.connect"),
-          action: async () => {
-            try {
-              if (isConnected) {
-                await ipcInvoke("ipc_disconnect_server", { serverId: server.id });
-              } else {
-                await ipcInvoke("ipc_connect_server", { serverId: server.id });
-              }
-            } catch (err) {
-              console.error("tray connect/disconnect failed:", err);
-            }
-          },
-        }),
-      );
-
-      // New Terminal
+      // Login Server (auto-connect if needed, then open terminal)
       items.push(
         await MenuItem.new({
           text: t("server.login_server"),
