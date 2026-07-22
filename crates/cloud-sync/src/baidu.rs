@@ -162,6 +162,8 @@ impl CloudProviderTrait for BaiduProvider {
             ("autoinit", "1".to_string()),
             ("block_list", serde_json::to_string(&block_list).unwrap()),
             ("content-md5", block_list[0].clone()),
+            // rtype=3: overwrite if file already exists (avoids errno -6)
+            ("rtype", "3".to_string()),
         ];
 
         let precreate_url = format!(
@@ -234,6 +236,8 @@ impl CloudProviderTrait for BaiduProvider {
             ("block_list", serde_json::to_string(&block_list).unwrap()),
             ("content-md5", block_list[0].clone()),
             ("uploadid", uploadid.clone()),
+            // rtype=3: overwrite if file already exists (must match precreate)
+            ("rtype", "3".to_string()),
         ];
 
         let create_url = format!(
