@@ -428,7 +428,7 @@ impl CloudProviderTrait for BaiduProvider {
         }
 
         let body_text = resp.text().await.unwrap_or_default();
-        tracing::debug!("baidu file_info: response body={}", &body_text[..body_text.len().min(500)]);
+        tracing::info!("baidu file_info: response body={}", &body_text[..body_text.len().min(500)]);
 
         let meta: BaiduFileMeta = serde_json::from_str(&body_text)
             .map_err(|e| {

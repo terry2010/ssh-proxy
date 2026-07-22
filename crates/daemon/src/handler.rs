@@ -3680,6 +3680,14 @@ async fn handle_cloud_sync_download(
     let last_local_mtime = sync_state.last_local_mtime(&provider).map(String::from);
     let current_local_mtime = local_config_mtime(state);
 
+    tracing::info!(
+        "cloud_sync_download: provider={} force={} remote_hash={:?} local_hash={:?} \
+         remote_modified={:?} last_local_mtime={:?} current_local_mtime={:?} config_path={:?}",
+        provider, force_download, remote_info.hash, local_hash,
+        remote_info.modified, last_local_mtime, current_local_mtime,
+        local_config_path(state),
+    );
+
     // If both cloud and local are unchanged since last sync, no update needed.
     // force_download=true skips this check (user confirmed overwrite).
     if !force_download && is_no_update(
@@ -3688,11 +3696,13 @@ async fn handle_cloud_sync_download(
         last_local_mtime.as_deref(),
         current_local_mtime.as_deref(),
     ) {
+        tracing::info!("cloud_sync_download: returning no_update");
         return Ok(build_no_update_response(
             remote_info.modified.as_deref(),
             current_local_mtime.as_deref(),
         ));
     }
+    tracing::info!("cloud_sync_download: passed no_update check");
 
     // If cloud is unchanged but local has been modified since last sync,
     // downloading would overwrite newer local data — ask user to confirm.
@@ -3703,11 +3713,13 @@ async fn handle_cloud_sync_download(
         last_local_mtime.as_deref(),
         current_local_mtime.as_deref(),
     ) {
+        tracing::info!("cloud_sync_download: returning local_newer");
         return Ok(build_local_newer_response(
             remote_info.modified.as_deref(),
             current_local_mtime.as_deref(),
         ));
     }
+    tracing::info!("cloud_sync_download: passed local_newer check, proceeding to download");
 
     // Download from cloud
     let blob = p

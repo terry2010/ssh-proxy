@@ -1156,9 +1156,9 @@ function CloudSyncSection() {
   const download = async (masterPassword?: string, forceDownload = false) => {
     setBusy(true);
     try {
-      let res: { blob?: string; size?: number; ok?: boolean; reason?: string; message?: string; cloud_updated_at?: string; local_updated_at?: string };
+      let res: { ok?: boolean; reason?: string; message?: string; cloud_updated_at?: string; local_updated_at?: string; device_name?: string; updated_at?: string; size?: number };
       try {
-        res = await ipcInvoke<{ blob?: string; size?: number; ok?: boolean; reason?: string; message?: string; cloud_updated_at?: string; local_updated_at?: string }>(
+        res = await ipcInvoke<{ ok?: boolean; reason?: string; message?: string; cloud_updated_at?: string; local_updated_at?: string; device_name?: string; updated_at?: string; size?: number }>(
           "ipc_cloud_sync_download",
           { provider, sync_path: syncPath || undefined, master_password: masterPassword, force_download: forceDownload },
         );
@@ -1172,7 +1172,7 @@ function CloudSyncSection() {
         }
         if (msg.includes("expired") || msg.includes("401")) {
           await ipcInvoke("ipc_cloud_sync_refresh_token", { provider });
-          res = await ipcInvoke<{ blob?: string; size?: number; ok?: boolean; reason?: string; message?: string; cloud_updated_at?: string; local_updated_at?: string }>(
+          res = await ipcInvoke<{ ok?: boolean; reason?: string; message?: string; cloud_updated_at?: string; local_updated_at?: string; device_name?: string; updated_at?: string; size?: number }>(
             "ipc_cloud_sync_download",
             { provider, sync_path: syncPath || undefined, master_password: masterPassword, force_download: forceDownload },
           );
@@ -1209,18 +1209,29 @@ function CloudSyncSection() {
           toast.error("解密失败，主密码与云端不一致或数据损坏");
           setBusy(false);
           return;
+        } else if (res.reason === "rollback_warning") {
+          // Cloud data is older than local last sync — confirm overwrite
+          if (window.confirm(res.message || "云端数据比本地旧，确定要下载吗？")) {
+            setBusy(false);
+            await download(masterPassword, true);
+            return;
+          } else {
+            setBusy(false);
+            return;
+          }
         } else {
           throw new Error(res.message || res.reason);
         }
       }
-      if (!res.blob) {
-        throw new Error("download response missing blob");
+      // Download success — daemon already applied the config (apply_full_export)
+      // No need to call ipc_import_full separately
+      if (res.ok === true || res.ok === undefined) {
+        const dev = res.device_name ? `来自 ${res.device_name}` : "";
+        const sz = res.size ? `，${res.size} 字节` : "";
+        toast.success(t("settings.cloud_sync.download_success") + (dev ? `：${dev}${sz}` : ""));
+      } else {
+        throw new Error(res.message || "下载失败");
       }
-      await ipcInvoke("ipc_import_full", {
-        blob: res.blob,
-        master_password: masterPassword,
-      });
-      toast.success(t("settings.cloud_sync.download_success"));
     } catch (e) {
       toast.error(String(e));
     } finally {
