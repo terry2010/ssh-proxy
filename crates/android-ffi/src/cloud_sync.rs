@@ -667,15 +667,14 @@ pub fn status(provider: &str) -> Result<String, String> {
             .to_string());
         }
     };
+    let _ = stored;  // token exists, user is authenticated
 
-    // Check remote file info
-    let p = build_provider(provider)?;
-    let rt = crate::runtime::runtime();
-    let remote_info = rt
-        .block_on(p.file_info(&stored.token, &SYNC_FILE_PATH))
-        .map_err(|e| format!("file_info: {}", e))?;
-
-    // Load local sync state for last_synced info
+    // Load local sync state for last_synced info.
+    // NOTE: We intentionally do NOT call file_info (network request) here,
+    // because status() is called from the UI main thread via Compose
+    // remember{}. A blocking network call here causes ANR.
+    // has_remote is set to true (token exists → likely has data);
+    // the actual remote check happens when user clicks download/upload.
     let state_path = sync_state_path();
     // Use empty password if store is locked — status should work without unlock
     let mp = String::new();
@@ -687,9 +686,9 @@ pub fn status(provider: &str) -> Result<String, String> {
 
     Ok(serde_json::json!({
         "authenticated": true,
-        "has_remote": remote_info.exists,
-        "remote_size": remote_info.size,
-        "remote_modified": remote_info.modified,
+        "has_remote": true,
+        "remote_size": null,
+        "remote_modified": null,
         "last_synced": prov_state.last_updated_at,
         "last_device": prov_state.last_device_name,
     })
