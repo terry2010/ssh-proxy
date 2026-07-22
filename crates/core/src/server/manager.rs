@@ -97,6 +97,48 @@ impl ServerManager {
         Ok(())
     }
 
+    /// Sync the server manager's in-memory state with a new config.
+    /// Removes servers that no longer exist in the config, adds new ones,
+    /// and reloads configs for existing servers.
+    /// Called after apply_full_export / import_full / cloud sync download.
+    pub async fn sync_from_config(&self, configs: &[ServerConfig]) {
+        let new_ids: std::collections::HashSet<&str> =
+            configs.iter().map(|c| c.id.as_str()).collect();
+
+        // Remove servers that are no longer in the config
+        let mut servers = self.servers.lock().await;
+        let to_remove: Vec<String> = servers
+            .keys()
+            .filter(|id| !new_ids.contains(id.as_str()))
+            .cloned()
+            .collect();
+        for id in &to_remove {
+            if let Some(instance) = servers.remove(id) {
+                let _ = instance.disconnect().await;
+                let _ = instance.stop_proxy().await;
+            }
+        }
+
+        // Add or update servers
+        for config in configs {
+            if let Some(existing) = servers.get(&config.id) {
+                // Check if config changed
+                if existing.config == *config {
+                    continue; // unchanged, skip
+                }
+                // Config changed — disconnect and replace
+                let _ = existing.disconnect().await;
+                let _ = existing.stop_proxy().await;
+                let instance = Arc::new(ServerInstance::new(config.clone()));
+                servers.insert(config.id.clone(), instance);
+            } else {
+                // New server
+                let instance = Arc::new(ServerInstance::new(config.clone()));
+                servers.insert(config.id.clone(), instance);
+            }
+        }
+    }
+
     /// Try to acquire a connection slot (§1.2: max 3 concurrent SSH connections)
     /// Returns Ok(()) if a slot was acquired, Err if the limit is reached.
     pub async fn try_acquire_connection(&self) -> Result<()> {

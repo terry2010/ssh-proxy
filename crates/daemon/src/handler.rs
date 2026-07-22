@@ -1934,6 +1934,12 @@ async fn handle_import_full(state: &DaemonState, params: &serde_json::Value) -> 
         .map_err(|e| IpcError::new(ErrorCode::Internal, e.to_string()))?;
     } // mgr dropped here — releases the lock before re-acquiring below
 
+    // Sync ServerManager with the new config
+    state
+        .server_manager
+        .sync_from_config(&export_data.config.servers)
+        .await;
+
     // Restore credentials
     for (server_id, pwd) in &export_data.passwords {
         let key =
@@ -4196,6 +4202,14 @@ async fn apply_full_export(
         .await
         .map_err(|e| IpcError::new(ErrorCode::Internal, e.to_string()))?;
     }
+
+    // Sync ServerManager with the new config — add new servers, remove
+    // deleted ones, reload changed configs. Without this, list_servers
+    // returns stale data from the old in-memory ServerManager state.
+    state
+        .server_manager
+        .sync_from_config(&export_data.config.servers)
+        .await;
 
     // Restore credentials
     for (server_id, pwd) in &export_data.passwords {

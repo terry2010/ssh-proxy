@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Top-level config structure (§7.2).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     /// Config file schema version, for future migration
     #[serde(default = "default_version")]
@@ -28,7 +28,7 @@ fn default_version() -> u32 {
 }
 
 /// General application preferences (§7.2).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GeneralConfig {
     #[serde(default = "default_false")]
     pub auto_start: bool,
@@ -108,7 +108,7 @@ pub struct GeneralConfig {
 }
 
 /// User-defined custom variable for trigger templates
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CustomVariable {
     pub name: String,
     pub value: String,
@@ -202,7 +202,7 @@ pub enum TriggerType {
 }
 
 /// Parameter schema definition for trigger templates.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ParameterSchema {
     pub name: String,
     pub label: String,
@@ -222,7 +222,7 @@ fn default_param_type() -> String {
 }
 
 /// Trigger template definition (§7.2).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TriggerTemplate {
     pub id: String,
     pub name: String,
@@ -263,7 +263,7 @@ fn default_timeout_secs() -> u64 {
 // === SECTION 1 END ===
 
 /// SSH connection configuration (§7.2).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SshConfig {
     pub host: String,
     #[serde(default = "default_ssh_port")]
@@ -301,7 +301,7 @@ fn default_connection_mode() -> String {
 }
 
 /// Proxy configuration (§7.2).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProxyConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -328,7 +328,7 @@ fn default_channel_idle_timeout() -> u64 {
 }
 
 /// Reconnection configuration (§7.2).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReconnectConfig {
     /// Whether to automatically reconnect after SSH connection drops.
     /// When true, the server monitors the connection and reconnects on disconnect.
@@ -381,7 +381,7 @@ impl Default for ReconnectConfig {
 }
 
 /// IP check configuration (§7.2).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IpCheckConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -403,7 +403,7 @@ impl Default for IpCheckConfig {
 }
 
 /// Trigger instance — a trigger added to a server, copied from template (§7.2).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TriggerInstance {
     /// UUID, auto-generated at add time
     pub id: String,
@@ -447,7 +447,7 @@ pub struct TriggerInstance {
 }
 
 /// Server configuration (§7.2).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub id: String,
     pub name: String,
