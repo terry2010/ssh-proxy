@@ -56,10 +56,13 @@ fun CloudSyncSection() {
     // Rollback dialog state: provider + info map
     var showRollbackDialog by remember { mutableStateOf<Pair<String, Map<String, String?>>?>(null) }
     // Overwrite confirm dialog state (cloud no update, user wants to overwrite local):
-    // provider + info map (cloud_updated_at, local_updated_at)
+    // provider + info map (cloud_updated_at, local_updated_at, cached_password)
     var showOverwriteConfirmDialog by remember { mutableStateOf<Pair<String, Map<String, String?>>?>(null) }
     // Overwrite second confirm dialog state: provider (after user clicks "覆盖" once)
     var showOverwriteSecondDialog by remember { mutableStateOf<String?>(null) }
+    // Cached master password for force download after overwrite confirmation
+    // (avoids re-prompting user for password after 2nd confirm)
+    var pendingDownloadPassword by remember { mutableStateOf<String?>(null) }
 
     // Collect OAuth events (deep link callback)
     LaunchedEffect(Unit) {
@@ -248,10 +251,12 @@ fun CloudSyncSection() {
                         }
                         resp.reason == "no_update" -> {
                             // Close password dialog, show overwrite confirmation
+                            // Cache the password so we don't ask again after 2nd confirm
                             showDownloadDialog = null
                             showOverwriteConfirmDialog = Pair(p, mapOf(
                                 "cloud_updated_at" to resp.cloud_updated_at,
                                 "local_updated_at" to resp.local_updated_at,
+                                "cached_password" to pw,
                             ))
                         }
                         resp.reason == "no_remote_data" -> {
@@ -334,14 +339,17 @@ fun CloudSyncSection() {
             text = {
                 Text("云端数据未更新，本地数据比云端更新。\n" +
                     "用云端数据覆盖将丢失本地最近改动，此操作不可撤销。\n\n" +
-                    "云端时间：${info["cloud_updated_at"] ?: "未知"}\n" +
-                    "本地时间：${info["local_updated_at"] ?: "未知"}")
+                    "云端时间：${formatTimestamp(info["cloud_updated_at"])}\n" +
+                    "本地时间：${formatTimestamp(info["local_updated_at"])}")
             },
             confirmButton = {
                 TextButton(onClick = {
+                    val cachedPw = info["cached_password"]
                     showOverwriteConfirmDialog = null
-                    // Show second confirmation dialog
+                    // Show second confirmation dialog, pass cached password via state
                     showOverwriteSecondDialog = provider
+                    // Store password for reuse after 2nd confirm
+                    pendingDownloadPassword = cachedPw
                 }) { Text("用云端覆盖") }
             },
             dismissButton = {
@@ -352,10 +360,14 @@ fun CloudSyncSection() {
 
     // Overwrite second confirm dialog (2nd confirm) — double confirm
     // before actually overwriting local data with cloud data.
+    // Uses cached password from 1st download attempt, no re-entry needed.
     if (showOverwriteSecondDialog != null) {
         val provider = showOverwriteSecondDialog!!
         AlertDialog(
-            onDismissRequest = { showOverwriteSecondDialog = null },
+            onDismissRequest = {
+                showOverwriteSecondDialog = null
+                pendingDownloadPassword = null
+            },
             title = { Text("再次确认") },
             text = {
                 Text("确定要用云端数据覆盖本地数据吗？\n" +
@@ -364,9 +376,25 @@ fun CloudSyncSection() {
             confirmButton = {
                 TextButton(
                     onClick = {
+                        val p = provider
+                        val pw = pendingDownloadPassword
                         showOverwriteSecondDialog = null
-                        // Re-open download dialog with force=true
-                        showDownloadDialog = Pair(provider, true)
+                        pendingDownloadPassword = null
+                        if (pw != null) {
+                            // Directly call download with cached password + force=true
+                            busy = true
+                            scope.launch {
+                                val resp = withContext(Dispatchers.IO) {
+                                    CloudSyncManager.download(p, pw, forceDownload = true)
+                                }
+                                busy = false
+                                if (resp.ok) {
+                                    msg = "下载成功：来自 ${resp.device_name ?: "未知设备"}，${resp.size ?: 0} 字节"
+                                } else {
+                                    msg = "下载失败：${resp.message ?: resp.reason ?: "未知错误"}"
+                                }
+                            }
+                        }
                     },
                     colors = ButtonDefaults.textButtonColors(
                         contentColor = MaterialTheme.colorScheme.error
@@ -374,13 +402,56 @@ fun CloudSyncSection() {
                 ) { Text("确认覆盖") }
             },
             dismissButton = {
-                TextButton(onClick = { showOverwriteSecondDialog = null }) { Text("取消") }
+                TextButton(onClick = {
+                    showOverwriteSecondDialog = null
+                    pendingDownloadPassword = null
+                }) { Text("取消") }
             },
         )
     }
 }
 
 // === SECTION cloud_sync_section_1 END ===
+
+/**
+ * Format a timestamp string for human-readable display in the device's timezone.
+ * Handles both unix epoch seconds (e.g. "1784716653") and RFC 3339 (e.g. "2026-07-21T19:05:00Z").
+ * Returns "未知" if input is null/blank/unparseable.
+ * Output format: "2026-07-21 19:05:00" (local timezone, second precision).
+ */
+private fun formatTimestamp(ts: String?): String {
+    if (ts.isNullOrBlank()) return "未知"
+    // Try unix epoch seconds (Baidu returns local_mtime as integer)
+    ts.toLongOrNull()?.let { epoch ->
+        return try {
+            val instant = java.time.Instant.ofEpochSecond(epoch)
+            val zoned = instant.atZone(java.time.ZoneId.systemDefault())
+            java.time.format.DateTimeFormatter
+                .ofPattern("yyyy-MM-dd HH:mm:ss")
+                .format(zoned)
+        } catch (_: Exception) {
+            "未知"
+        }
+    }
+    // Try RFC 3339 / ISO 8601
+    return try {
+        val instant = java.time.Instant.parse(ts)
+        val zoned = instant.atZone(java.time.ZoneId.systemDefault())
+        java.time.format.DateTimeFormatter
+            .ofPattern("yyyy-MM-dd HH:mm:ss")
+            .format(zoned)
+    } catch (_: Exception) {
+        // Try local date-time without timezone
+        try {
+            val ldt = java.time.LocalDateTime.parse(ts)
+            java.time.format.DateTimeFormatter
+                .ofPattern("yyyy-MM-dd HH:mm:ss")
+                .format(ldt)
+        } catch (_: Exception) {
+            ts  // fallback to raw string
+        }
+    }
+}
 
 /** A single cloud provider row with connect/upload/download/disconnect buttons. */
 @Composable
