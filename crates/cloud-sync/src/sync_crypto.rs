@@ -233,7 +233,43 @@ fn hostname() -> String {
         std::env::var("ANDROID_HOSTNAME")
             .unwrap_or_else(|_| "Android".to_string())
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(target_os = "macos")]
+    {
+        // macOS: HOSTNAME env var is not exported by default in zsh,
+        // and /etc/hostname doesn't exist. Use scutil to get the user-facing
+        // computer name, falling back to LocalHostName, then hostname command.
+        if let Ok(name) = std::process::Command::new("scutil")
+            .args(["--get", "ComputerName"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .map(|s| if s.is_empty() { "unknown".to_string() } else { s })
+        {
+            if name != "unknown" {
+                return name;
+            }
+        }
+        // Fall back to LocalHostName (Bonjour name)
+        if let Ok(name) = std::process::Command::new("scutil")
+            .args(["--get", "LocalHostName"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        {
+            if !name.is_empty() {
+                return name;
+            }
+        }
+        // Last resort: hostname command
+        if let Ok(name) = std::process::Command::new("hostname")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        {
+            if !name.is_empty() {
+                return name;
+            }
+        }
+        "unknown".to_string()
+    }
+    #[cfg(all(not(target_os = "android"), not(target_os = "macos")))]
     {
         std::env::var("HOSTNAME")
             .or_else(|_| std::env::var("COMPUTERNAME"))
