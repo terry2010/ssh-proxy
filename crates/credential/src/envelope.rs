@@ -445,6 +445,138 @@ pub fn read_params(blob: &[u8]) -> Result<Argon2Params, EnvelopeError> {
     Ok(Argon2Params::from_bytes(&blob[5..5 + PARAMS_LEN]))
 }
 
+/// Parsed envelope blob components (for incremental re-encryption).
+pub struct ParsedBlob<'a> {
+    pub magic: &'a [u8; 4],
+    pub params: Argon2Params,
+    pub salt: &'a [u8],
+    pub nonce_kek: &'a [u8],
+    pub wrapped_dek: &'a [u8],
+    pub nonce_data: &'a [u8],
+    pub ciphertext: &'a [u8],
+}
+
+/// Parse an envelope blob into its components (without decrypting).
+pub fn parse_blob<'a>(magic: &[u8; 4], blob: &'a [u8]) -> Result<ParsedBlob<'a>, EnvelopeError> {
+    if blob.len() < PREFIX_LEN {
+        return Err(EnvelopeError::TooShort(blob.len(), PREFIX_LEN));
+    }
+    if &blob[..4] != magic {
+        return Err(EnvelopeError::InvalidMagic);
+    }
+    let version = blob[4];
+    if version != FORMAT_VERSION {
+        return Err(EnvelopeError::UnsupportedVersion(version));
+    }
+    let magic_ref: &[u8; 4] = blob[..4].try_into().unwrap();
+    let params = Argon2Params::from_bytes(&blob[5..5 + PARAMS_LEN]);
+    let salt = &blob[5 + PARAMS_LEN..5 + PARAMS_LEN + SALT_LEN];
+    let nonce_kek = &blob[5 + PARAMS_LEN + SALT_LEN..HEADER_LEN];
+    let wrapped_dek = &blob[HEADER_LEN..HEADER_LEN + WRAPPED_DEK_LEN];
+    let nonce_data = &blob[HEADER_LEN + WRAPPED_DEK_LEN..HEADER_LEN + WRAPPED_DEK_LEN + NONCE_LEN];
+    let ciphertext = &blob[PREFIX_LEN..];
+    Ok(ParsedBlob { magic: magic_ref, params, salt, nonce_kek, wrapped_dek, nonce_data, ciphertext })
+}
+
+/// Decrypt data using a raw DEK (32 bytes) and the blob's nonce_data.
+/// Used for incremental saves where the DEK is already cached.
+pub fn decrypt_data_with_dek(
+    magic: &[u8; 4],
+    dek: &[u8; DEK_LEN],
+    nonce_data: &[u8],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, EnvelopeError> {
+    let mut data_aad = Vec::with_capacity(4 + 1 + NONCE_LEN);
+    data_aad.extend_from_slice(magic);
+    data_aad.push(FORMAT_VERSION);
+    data_aad.extend_from_slice(nonce_data);
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(dek));
+    cipher
+        .decrypt(Nonce::from_slice(nonce_data), Payload { msg: ciphertext, aad: &data_aad })
+        .map_err(|_| EnvelopeError::DecryptFailed)
+}
+
+/// Encrypt data using a raw DEK, producing just the (nonce_data, ciphertext) portion.
+/// Used for incremental saves — the header + wrapped_dek are preserved from the existing file.
+pub fn encrypt_data_with_dek(
+    magic: &[u8; 4],
+    dek: &[u8; DEK_LEN],
+    plaintext: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>), EnvelopeError> {
+    let mut nonce_data = [0u8; NONCE_LEN];
+    rng().fill_bytes(&mut nonce_data);
+    let mut data_aad = Vec::with_capacity(4 + 1 + NONCE_LEN);
+    data_aad.extend_from_slice(magic);
+    data_aad.push(FORMAT_VERSION);
+    data_aad.extend_from_slice(&nonce_data);
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(dek));
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce_data), Payload { msg: plaintext, aad: &data_aad })
+        .map_err(|e| EnvelopeError::Crypto(format!("aes-gcm encrypt data failed: {}", e)))?;
+    Ok((nonce_data.to_vec(), ciphertext))
+}
+
+/// Assemble a full blob from header components + data.
+/// Used after incremental re-encryption: header + wrapped_dek are preserved,
+/// nonce_data + ciphertext are new.
+pub fn assemble_blob(
+    magic: &[u8; 4],
+    params: Argon2Params,
+    salt: &[u8],
+    nonce_kek: &[u8],
+    wrapped_dek: &[u8],
+    nonce_data: &[u8],
+    ciphertext: &[u8],
+) -> Vec<u8> {
+    let mut blob = Vec::with_capacity(PREFIX_LEN + ciphertext.len());
+    blob.extend_from_slice(magic);
+    blob.push(FORMAT_VERSION);
+    blob.extend_from_slice(&params.to_bytes());
+    blob.extend_from_slice(salt);
+    blob.extend_from_slice(nonce_kek);
+    blob.extend_from_slice(wrapped_dek);
+    blob.extend_from_slice(nonce_data);
+    blob.extend_from_slice(ciphertext);
+    blob
+}
+
+/// Unwrap DEK from a parsed blob using the password.
+/// Returns the raw 32-byte DEK.
+pub fn unwrap_dek(
+    password: &str,
+    salt_extra: &[u8],
+    parsed: &ParsedBlob,
+) -> Result<[u8; DEK_LEN], EnvelopeError> {
+    let kek_salt = if salt_extra.is_empty() {
+        parsed.salt.to_vec()
+    } else {
+        let len_prefix = (salt_extra.len() as u64).to_le_bytes();
+        [&len_prefix, salt_extra, parsed.salt].concat()
+    };
+    let mut kek = derive_kek(password, &kek_salt, parsed.params)?;
+
+    // Reconstruct header AAD (bytes 0..HEADER_LEN of the original blob)
+    let mut header_aad = Vec::with_capacity(HEADER_LEN);
+    header_aad.extend_from_slice(parsed.magic);
+    header_aad.push(FORMAT_VERSION);
+    header_aad.extend_from_slice(&parsed.params.to_bytes());
+    header_aad.extend_from_slice(parsed.salt);
+    header_aad.extend_from_slice(parsed.nonce_kek);
+
+    let kek_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&kek));
+    let dek = kek_cipher
+        .decrypt(Nonce::from_slice(parsed.nonce_kek), Payload { msg: parsed.wrapped_dek, aad: &header_aad })
+        .map_err(|_| EnvelopeError::DecryptFailed)?;
+    kek.zeroize();
+
+    if dek.len() != DEK_LEN {
+        return Err(EnvelopeError::DecryptFailed);
+    }
+    let mut dek_arr = [0u8; DEK_LEN];
+    dek_arr.copy_from_slice(&dek);
+    Ok(dek_arr)
+}
+
 // === SECTION 2 END ===
 
 #[cfg(test)]
@@ -634,6 +766,59 @@ mod tests {
         let blob = encrypt(TEST_MAGIC, "pw", &salt, &[], Argon2Params::mobile(), &plaintext).unwrap();
         let decrypted = decrypt(TEST_MAGIC, "pw", &[], &blob).unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_parse_blob_and_incremental_reencrypt() {
+        let salt = make_salt();
+        let plaintext1 = b"original data";
+        let blob = encrypt(TEST_MAGIC, "pw", &salt, &[], Argon2Params::mobile(), plaintext1).unwrap();
+
+        // Parse the blob
+        let parsed = parse_blob(TEST_MAGIC, &blob).unwrap();
+
+        // Unwrap DEK
+        let dek = unwrap_dek("pw", &[], &parsed).unwrap();
+
+        // Decrypt data with DEK
+        let decrypted = decrypt_data_with_dek(TEST_MAGIC, &dek, parsed.nonce_data, parsed.ciphertext).unwrap();
+        assert_eq!(decrypted, plaintext1);
+
+        // Re-encrypt new data with same DEK (incremental save)
+        let plaintext2 = b"new data after edit";
+        let (new_nonce_data, new_ciphertext) = encrypt_data_with_dek(TEST_MAGIC, &dek, plaintext2).unwrap();
+
+        // Assemble new blob (preserving header + wrapped_dek)
+        let new_blob = assemble_blob(
+            TEST_MAGIC, parsed.params, parsed.salt, parsed.nonce_kek,
+            parsed.wrapped_dek, &new_nonce_data, &new_ciphertext,
+        );
+
+        // Decrypt new blob with password — should get new data
+        let decrypted2 = decrypt(TEST_MAGIC, "pw", &[], &new_blob).unwrap();
+        assert_eq!(decrypted2, plaintext2);
+    }
+
+    #[test]
+    fn test_unwrap_dek_wrong_password_fails() {
+        let salt = make_salt();
+        let blob = encrypt(TEST_MAGIC, "correctPw", &salt, &[], Argon2Params::mobile(), b"data").unwrap();
+        let parsed = parse_blob(TEST_MAGIC, &blob).unwrap();
+        let result = unwrap_dek("wrongPw", &[], &parsed);
+        assert!(matches!(result, Err(EnvelopeError::DecryptFailed)));
+    }
+
+    #[test]
+    fn test_assemble_blob_roundtrip() {
+        let salt = make_salt();
+        let blob = encrypt(TEST_MAGIC, "pw", &salt, &[], Argon2Params::mobile(), b"test").unwrap();
+        let parsed = parse_blob(TEST_MAGIC, &blob).unwrap();
+        // Reassemble with same components → should produce identical blob
+        let reassembled = assemble_blob(
+            TEST_MAGIC, parsed.params, parsed.salt, parsed.nonce_kek,
+            parsed.wrapped_dek, parsed.nonce_data, parsed.ciphertext,
+        );
+        assert_eq!(reassembled, blob);
     }
 }
 
