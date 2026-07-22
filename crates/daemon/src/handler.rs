@@ -3147,10 +3147,25 @@ mod tests {
     /// 11.3 补充: 云端无更新响应 — 调用 build_no_update_response 纯函数
     #[test]
     fn test_no_update_response() {
-        let resp = build_no_update_response();
+        let resp = build_no_update_response(
+            Some("2026-07-21T18:40:00Z"),
+            Some("2026-07-21T19:05:00Z"),
+        );
         assert_eq!(resp["ok"], false);
         assert_eq!(resp["reason"], "no_update");
         assert!(resp["message"].as_str().unwrap().contains("无更新"));
+        assert_eq!(resp["cloud_updated_at"], "2026-07-21T18:40:00Z");
+        assert_eq!(resp["local_updated_at"], "2026-07-21T19:05:00Z");
+    }
+
+    /// 验证 no_update 响应在时间戳为 None 时不崩溃
+    #[test]
+    fn test_no_update_response_null_timestamps() {
+        let resp = build_no_update_response(None, None);
+        assert_eq!(resp["ok"], false);
+        assert_eq!(resp["reason"], "no_update");
+        assert!(resp["cloud_updated_at"].is_null());
+        assert!(resp["local_updated_at"].is_null());
     }
 
     /// 11.3 补充: 云端无数据响应 — 调用 build_no_remote_data_response 纯函数
@@ -3569,10 +3584,15 @@ async fn handle_cloud_sync_download(
     .map_err(|e| IpcError::new(ErrorCode::Internal, format!("spawn_blocking: {}", e)))?;
 
     let local_hash = sync_state.last_hash(&provider);
+    let local_updated_at = sync_state.last_sync_info(&provider).updated_at;
 
-    // If hash matches, no update needed
-    if is_no_update(&remote_info, local_hash) {
-        return Ok(build_no_update_response());
+    // If hash matches, no update needed — unless force_download is set,
+    // in which case we proceed to download anyway (user confirmed overwrite).
+    if !force_download && is_no_update(&remote_info, local_hash) {
+        return Ok(build_no_update_response(
+            remote_info.modified.as_deref(),
+            local_updated_at.as_deref(),
+        ));
     }
 
     // Download from cloud
@@ -3880,11 +3900,18 @@ pub fn build_no_remote_data_response() -> serde_json::Value {
 }
 
 /// Build the "no update needed" response (download handler, hash matches).
-pub fn build_no_update_response() -> serde_json::Value {
+/// Includes timestamps so the frontend can show a confirmation dialog
+/// asking the user whether to overwrite newer local data with older cloud data.
+pub fn build_no_update_response(
+    cloud_updated_at: Option<&str>,
+    local_updated_at: Option<&str>,
+) -> serde_json::Value {
     serde_json::json!({
         "ok": false,
         "reason": "no_update",
         "message": "云端无更新",
+        "cloud_updated_at": cloud_updated_at,
+        "local_updated_at": local_updated_at,
     })
 }
 

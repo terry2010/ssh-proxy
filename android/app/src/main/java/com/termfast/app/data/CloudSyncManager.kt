@@ -121,6 +121,7 @@ object CloudSyncManager {
         val size: Long? = null,
         val cloud_updated_at: String? = null,
         val last_updated_at: String? = null,
+        val local_updated_at: String? = null,
     )
 
     // === SECTION cloud_sync_manager_1 END ===

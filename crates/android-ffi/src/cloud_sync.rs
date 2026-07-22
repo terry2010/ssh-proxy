@@ -496,16 +496,22 @@ pub fn download(params_json: &str) -> Result<String, String> {
     }).map_err(|e| e)?;
     let sync_state = sync_state;
     let local_hash = sync_state.last_hash(&provider);
+    let local_updated_at = sync_state.last_sync_info(&provider).updated_at;
 
-    // If hash matches, no update needed
-    if let (Some(rh), Some(lh)) = (&remote_info.hash, local_hash) {
-        if rh == lh {
-            return Ok(serde_json::json!({
-                "ok": false,
-                "reason": "no_update",
-                "message": "云端无更新",
-            })
-            .to_string());
+    // If hash matches, no update needed — unless force_download is set,
+    // in which case we proceed to download anyway (user confirmed overwrite).
+    if !force_download {
+        if let (Some(rh), Some(lh)) = (&remote_info.hash, local_hash) {
+            if rh == lh {
+                return Ok(serde_json::json!({
+                    "ok": false,
+                    "reason": "no_update",
+                    "message": "云端无更新",
+                    "cloud_updated_at": remote_info.modified,
+                    "local_updated_at": local_updated_at,
+                })
+                .to_string());
+            }
         }
     }
 

@@ -55,6 +55,11 @@ fun CloudSyncSection() {
     var showConflictDialog by remember { mutableStateOf<Pair<String, String>?>(null) }
     // Rollback dialog state: provider + info map
     var showRollbackDialog by remember { mutableStateOf<Pair<String, Map<String, String?>>?>(null) }
+    // Overwrite confirm dialog state (cloud no update, user wants to overwrite local):
+    // provider + info map (cloud_updated_at, local_updated_at)
+    var showOverwriteConfirmDialog by remember { mutableStateOf<Pair<String, Map<String, String?>>?>(null) }
+    // Overwrite second confirm dialog state: provider (after user clicks "覆盖" once)
+    var showOverwriteSecondDialog by remember { mutableStateOf<String?>(null) }
 
     // Collect OAuth events (deep link callback)
     LaunchedEffect(Unit) {
@@ -242,8 +247,12 @@ fun CloudSyncSection() {
                             msg = "解密失败，主密码与云端不一致"
                         }
                         resp.reason == "no_update" -> {
-                            msg = "云端无更新"
+                            // Close password dialog, show overwrite confirmation
                             showDownloadDialog = null
+                            showOverwriteConfirmDialog = Pair(p, mapOf(
+                                "cloud_updated_at" to resp.cloud_updated_at,
+                                "local_updated_at" to resp.local_updated_at,
+                            ))
                         }
                         resp.reason == "no_remote_data" -> {
                             msg = "云端没有同步数据"
@@ -310,6 +319,62 @@ fun CloudSyncSection() {
             },
             dismissButton = {
                 TextButton(onClick = { showRollbackDialog = null }) { Text("取消") }
+            },
+        )
+    }
+
+    // Overwrite confirm dialog (1st confirm) — cloud has no update,
+    // user wants to overwrite newer local data with older cloud data.
+    if (showOverwriteConfirmDialog != null) {
+        val provider = showOverwriteConfirmDialog!!.first
+        val info = showOverwriteConfirmDialog!!.second
+        AlertDialog(
+            onDismissRequest = { showOverwriteConfirmDialog = null },
+            title = { Text("覆盖本地数据？") },
+            text = {
+                Text("云端数据未更新，本地数据比云端更新。\n" +
+                    "用云端数据覆盖将丢失本地最近改动，此操作不可撤销。\n\n" +
+                    "云端时间：${info["cloud_updated_at"] ?: "未知"}\n" +
+                    "本地时间：${info["local_updated_at"] ?: "未知"}")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showOverwriteConfirmDialog = null
+                    // Show second confirmation dialog
+                    showOverwriteSecondDialog = provider
+                }) { Text("用云端覆盖") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showOverwriteConfirmDialog = null }) { Text("取消") }
+            },
+        )
+    }
+
+    // Overwrite second confirm dialog (2nd confirm) — double confirm
+    // before actually overwriting local data with cloud data.
+    if (showOverwriteSecondDialog != null) {
+        val provider = showOverwriteSecondDialog!!
+        AlertDialog(
+            onDismissRequest = { showOverwriteSecondDialog = null },
+            title = { Text("再次确认") },
+            text = {
+                Text("确定要用云端数据覆盖本地数据吗？\n" +
+                    "本地最近改动将永久丢失，不可恢复。")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showOverwriteSecondDialog = null
+                        // Re-open download dialog with force=true
+                        showDownloadDialog = Pair(provider, true)
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) { Text("确认覆盖") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showOverwriteSecondDialog = null }) { Text("取消") }
             },
         )
     }
