@@ -457,7 +457,13 @@ impl CloudProviderTrait for BaiduProvider {
             exists: info.is_some(),
             size: info.map(|f| f.size),
             hash: info.and_then(|f| f.md5.clone()),
-            modified: info.map(|f| f.local_mtime.to_string()),
+            // Use server_mtime (upload time) as the authoritative cloud time.
+            // Fallback to local_mtime if server_mtime is missing.
+            modified: info.and_then(|f| {
+                f.server_mtime
+                    .or(f.local_mtime)
+                    .map(|t| t.to_string())
+            }),
         });
         tracing::debug!("baidu file_info: result exists={}", info.is_some());
         result
@@ -521,7 +527,14 @@ struct BaiduFileInfo {
     dlink: Option<String>,
     #[serde(default)]
     md5: Option<String>,
-    local_mtime: i64,
+    /// Server-side modification time (when file was uploaded to Baidu).
+    /// This is the authoritative "cloud upload time".
+    #[serde(default)]
+    server_mtime: Option<i64>,
+    /// Client-side modification time (file's local mtime on the uploader's device).
+    #[serde(default)]
+    #[allow(dead_code)]
+    local_mtime: Option<i64>,
     /// Baidu list API returns server_filename; meta API returns filename.
     /// We try both, plus fallback to extracting from path.
     #[serde(default)]

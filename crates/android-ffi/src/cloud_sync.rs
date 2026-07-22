@@ -543,7 +543,7 @@ pub fn download(params_json: &str) -> Result<String, String> {
                         "reason": "no_update",
                         "message": "云端无更新",
                         "cloud_updated_at": remote_info.modified,
-                        "local_updated_at": local_updated_at,
+                        "local_updated_at": current_local_mtime,
                     })
                     .to_string());
                 }
@@ -560,7 +560,7 @@ pub fn download(params_json: &str) -> Result<String, String> {
                         "reason": "local_newer",
                         "message": "本地数据比云端新，下载将覆盖本地改动",
                         "cloud_updated_at": remote_info.modified,
-                        "local_updated_at": local_updated_at,
+                        "local_updated_at": current_local_mtime,
                     })
                     .to_string());
                 }

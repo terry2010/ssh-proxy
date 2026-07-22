@@ -3688,7 +3688,7 @@ async fn handle_cloud_sync_download(
     ) {
         return Ok(build_no_update_response(
             remote_info.modified.as_deref(),
-            local_updated_at.as_deref(),
+            current_local_mtime.as_deref(),
         ));
     }
 
@@ -3703,7 +3703,7 @@ async fn handle_cloud_sync_download(
     ) {
         return Ok(build_local_newer_response(
             remote_info.modified.as_deref(),
-            local_updated_at.as_deref(),
+            current_local_mtime.as_deref(),
         ));
     }
 
