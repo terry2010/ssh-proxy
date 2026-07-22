@@ -1,5 +1,22 @@
 # AI 助手开发规范
 
+## Git 提交规则
+
+### 禁止提交 docs 目录
+
+**`docs/` 目录禁止提交到 git。** 该目录存放设计文档、调研报告等内部资料，不入库。
+
+- 提交前必须检查 `git status`，如果 `docs/` 下有改动，**不要 `git add docs/`**
+- 如果 `git add .` 或 `git add -A` 误加了 `docs/`，提交前必须 `git reset HEAD docs/`
+- `.gitignore` 应包含 `docs/` 规则（若缺失，发现时补上）
+- 已经误提交的 docs 文件，需要从 git 历史中清除（用 `git filter-repo` 或 `git filter-branch`）
+
+### 其他提交规则
+
+- 提交前运行 `git status` 确认改动范围，避免误提交
+- 不要提交临时文件、日志、IDE 配置
+- 不要提交密钥、凭证、`.env` 等敏感文件
+
 ## Subagent 使用规则（仅允许 reviewer）
 
 **只允许 spawn `reviewer` 这一个只读 subagent profile，禁止其他所有 subagent。**

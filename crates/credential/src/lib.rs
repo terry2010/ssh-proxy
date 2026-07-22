@@ -8,6 +8,8 @@ pub mod memory;
 pub mod file;
 pub mod encrypted;
 pub mod encrypted_adapter;
+pub mod envelope;
+pub mod hw_id;
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod keychain;
@@ -18,6 +20,7 @@ pub use encrypted::{DerivedKey, EncryptedCredentialStore};
 pub use encrypted_adapter::EncryptedFileCredentialStore;
 pub use file::FileCredentialStore;
 pub use memory::InMemoryCredentialStore;
+pub use envelope::{Argon2Params, EnvelopeError};
 
 /// Credential type prefix in key naming
 pub const SERVICE_NAME: &str = "termfast";
