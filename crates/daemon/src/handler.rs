@@ -3686,14 +3686,6 @@ async fn handle_cloud_sync_download(
     let last_local_mtime = sync_state.last_local_mtime(&provider).map(String::from);
     let current_local_mtime = local_config_mtime(state);
 
-    tracing::info!(
-        "cloud_sync_download: provider={} force={} remote_hash={:?} local_hash={:?} \
-         remote_modified={:?} last_local_mtime={:?} current_local_mtime={:?} config_path={:?}",
-        provider, force_download, remote_info.hash, local_hash,
-        remote_info.modified, last_local_mtime, current_local_mtime,
-        local_config_path(state),
-    );
-
     // If both cloud and local are unchanged since last sync, no update needed.
     // force_download=true skips this check (user confirmed overwrite).
     if !force_download && is_no_update(
@@ -3702,13 +3694,11 @@ async fn handle_cloud_sync_download(
         last_local_mtime.as_deref(),
         current_local_mtime.as_deref(),
     ) {
-        tracing::info!("cloud_sync_download: returning no_update");
         return Ok(build_no_update_response(
             remote_info.modified.as_deref(),
             current_local_mtime.as_deref(),
         ));
     }
-    tracing::info!("cloud_sync_download: passed no_update check");
 
     // If cloud is unchanged but local has been modified since last sync,
     // downloading would overwrite newer local data — ask user to confirm.
@@ -3719,13 +3709,11 @@ async fn handle_cloud_sync_download(
         last_local_mtime.as_deref(),
         current_local_mtime.as_deref(),
     ) {
-        tracing::info!("cloud_sync_download: returning local_newer");
         return Ok(build_local_newer_response(
             remote_info.modified.as_deref(),
             current_local_mtime.as_deref(),
         ));
     }
-    tracing::info!("cloud_sync_download: passed local_newer check, proceeding to download");
 
     // Download from cloud
     let blob = p
@@ -3733,7 +3721,6 @@ async fn handle_cloud_sync_download(
         .await
         .map_err(|e| IpcError::new(ErrorCode::Internal, format!("download: {}", e)))?;
     let blob_size = blob.len();
-    tracing::info!("cloud_sync_download: downloaded {} bytes", blob_size);
 
     // Decrypt — on blocking thread (Argon2id)
     let mp = master_password.clone();
@@ -3744,12 +3731,8 @@ async fn handle_cloud_sync_download(
     .map_err(|e| IpcError::new(ErrorCode::Internal, format!("spawn_blocking: {}", e)))?;
 
     let payload = match decrypt_result {
-        Ok(p) => {
-            tracing::info!("cloud_sync_download: decrypt ok, device={}, updated_at={}", p.device_name, p.updated_at);
-            p
-        }
-        Err(e) => {
-            tracing::warn!("cloud_sync_download: decrypt failed: {}", e);
+        Ok(p) => p,
+        Err(_) => {
             // Decryption failed — password mismatch or corrupted data
             // Return a flag so the frontend can prompt for the cloud password
             return Ok(build_decrypt_failed_response());
@@ -3760,7 +3743,6 @@ async fn handle_cloud_sync_download(
     {
         let last_updated = sync_state.get(&provider).last_updated_at.as_deref().map(String::from);
         if let Some(rollback) = check_rollback_with_force(force_download, &payload, last_updated.as_deref()) {
-            tracing::info!("cloud_sync_download: rollback detected, returning rollback response");
             return Ok(rollback);
         }
     }
@@ -3770,7 +3752,6 @@ async fn handle_cloud_sync_download(
         serde_json::from_value(payload.config.clone())
             .map_err(|e| IpcError::new(ErrorCode::Internal, format!("parse config: {}", e)))?;
     apply_full_export(state, &export_data).await?;
-    tracing::info!("cloud_sync_download: apply_full_export done, config:changed broadcast sent");
 
     // Update sync state — record the config.json mtime AFTER apply, so that
     // on next download we can detect if the local config has been modified since.
