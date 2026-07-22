@@ -35,6 +35,75 @@ fn baidu_path(path: &str) -> String {
     format!("/apps/{}{}", BAIDU_APP_NAME, p)
 }
 
+/// Translate a Baidu errno code to a user-friendly Chinese message.
+/// Source: Baidu Netdisk Open Platform error codes + community docs.
+/// Returns (short_msg) suitable for displaying to end users.
+fn baidu_errno_msg(errno: i64) -> &'static str {
+    match errno {
+        0 => "成功",
+        // Negative codes — auth/session related
+        -1 => "分享功能被禁用（文件违规）",
+        -2 => "用户不存在，请重新登录",
+        -3 => "文件不存在",
+        -4 => "登录信息有误，请重新登录",
+        -5 => "登录信息有误，请重新登录",
+        -6 => "登录已过期，请重新连接百度网盘",
+        -7 => "该分享已删除或已取消",
+        -8 => "该分享已经过期",
+        -9 => "访问密码错误",
+        -10 => "分享外链已达上限",
+        -11 => "验证 cookie 无效，请重新登录",
+        -16 => "该文件已限制操作",
+        -30 => "文件已存在",
+        -31 => "文件保存失败",
+        -32 => "网盘空间不足",
+        -33 => "一次操作数量超限（最多 999 个）",
+        -62 => "密码输入次数达到上限",
+        // Positive codes — API errors
+        2 => "参数错误（请检查路径或文件名）",
+        3 => "未登录或帐号无效，请重新连接",
+        4 => "存储服务异常，请稍后重试",
+        12 => "批量处理错误",
+        14 => "网络错误，请稍后重试",
+        15 => "操作失败，请稍后重试",
+        16 => "网络错误，请稍后重试",
+        108 => "文件名含敏感词，请重命名",
+        111 => "外链转存失败",
+        112 => "页面已过期，请重试",
+        // PCS-specific large codes
+        31045 => "用户不存在，请重新登录",
+        31061 => "文件已存在",
+        31062 => "文件名不合法",
+        31063 => "文件名太长",
+        31064 => "目录名太长",
+        31066 => "文件或目录不存在",
+        31079 => "秒传文件失败",
+        // Token errors
+        110 => "Token 已过期，请重新连接",
+        _ => "未知错误",
+    }
+}
+
+/// Format an errno into a user-friendly error string.
+fn baidu_error(prefix: &str, errno: i64) -> CloudSyncError {
+    CloudSyncError::Api(format!("{}：{}（错误码 {}）", prefix, baidu_errno_msg(errno), errno))
+}
+
+/// Format an HTTP error response into a user-friendly message.
+/// If the body is HTML (error page), don't expose it to the user.
+fn http_error(prefix: &str, status: reqwest::StatusCode, body: String) -> CloudSyncError {
+    // If body looks like HTML, don't show it to the user
+    let msg = if body.trim_start().starts_with('<') || body.is_empty() {
+        format!("HTTP {}", status.as_u16())
+    } else if body.len() > 200 {
+        // Truncate long JSON error bodies
+        format!("HTTP {}：{}...", status.as_u16(), &body[..200])
+    } else {
+        format!("HTTP {}：{}", status.as_u16(), body)
+    };
+    CloudSyncError::Api(format!("{}：{}", prefix, msg))
+}
+
 /// Build a reqwest client with timeouts to prevent indefinite hangs.
 fn reqwest_client() -> reqwest::Client {
     reqwest::Client::builder()
@@ -131,7 +200,7 @@ impl CloudProviderTrait for BaiduProvider {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             return Err(CloudSyncError::OAuth(format!(
-                "refresh failed ({}): {}",
+                "token refresh failed ({}): {}",
                 status, body
             )));
         }
@@ -181,19 +250,16 @@ impl CloudProviderTrait for BaiduProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(CloudSyncError::Api(format!(
-                "precreate failed ({}): {}",
+            return Err(http_error(
+                "预上传失败",
                 status, body
-            )));
+            ));
         }
 
         let precreate_resp: BaiduPrecreateResponse = resp.json().await?;
 
         if precreate_resp.errno != 0 {
-            return Err(CloudSyncError::Api(format!(
-                "precreate errno: {}",
-                precreate_resp.errno
-            )));
+            return Err(baidu_error("预上传失败", precreate_resp.errno));
         }
 
         let uploadid = precreate_resp.uploadid;
@@ -222,10 +288,10 @@ impl CloudProviderTrait for BaiduProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(CloudSyncError::Api(format!(
-                "slice upload failed ({}): {}",
+            return Err(http_error(
+                "分片上传失败",
                 status, body
-            )));
+            ));
         }
 
         // Step 3: create (finalize)
@@ -255,18 +321,15 @@ impl CloudProviderTrait for BaiduProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(CloudSyncError::Api(format!(
-                "create failed ({}): {}",
+            return Err(http_error(
+                "创建文件失败",
                 status, body
-            )));
+            ));
         }
 
         let create_resp: BaiduCreateResponse = resp.json().await?;
         if create_resp.errno != 0 {
-            return Err(CloudSyncError::Api(format!(
-                "create errno: {}",
-                create_resp.errno
-            )));
+            return Err(baidu_error("创建文件失败", create_resp.errno));
         }
 
         Ok(())
@@ -299,10 +362,10 @@ impl CloudProviderTrait for BaiduProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(CloudSyncError::Api(format!(
-                "download failed ({}): {}",
+            return Err(http_error(
+                "下载失败",
                 status, body
-            )));
+            ));
         }
 
         let bytes = resp.bytes().await?;
@@ -340,10 +403,10 @@ impl CloudProviderTrait for BaiduProvider {
 
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(CloudSyncError::Api(format!(
-                "Baidu meta request failed ({}): {}",
+            return Err(http_error(
+                "查询文件信息失败",
                 status, body
-            )));
+            ));
         }
 
         let meta: BaiduFileMeta = resp.json().await?;
@@ -384,10 +447,10 @@ impl CloudProviderTrait for BaiduProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(CloudSyncError::Api(format!(
-                "delete failed ({}): {}",
+            return Err(http_error(
+                "删除文件失败",
                 status, body
-            )));
+            ));
         }
 
         Ok(())
@@ -565,6 +628,32 @@ mod tests {
         let meta: BaiduFileMeta = serde_json::from_str(json).unwrap();
         assert_ne!(meta.errno, 0);
         assert!(meta.list.is_empty());
+    }
+
+    /// 验证百度错误码翻译为用户友好文案
+    #[test]
+    fn test_baidu_errno_msg() {
+        assert_eq!(baidu_errno_msg(0), "成功");
+        assert_eq!(baidu_errno_msg(-6), "登录已过期，请重新连接百度网盘");
+        assert_eq!(baidu_errno_msg(-32), "网盘空间不足");
+        assert_eq!(baidu_errno_msg(2), "参数错误（请检查路径或文件名）");
+        assert_eq!(baidu_errno_msg(31066), "文件或目录不存在");
+        // 未知错误码返回通用文案
+        assert_eq!(baidu_errno_msg(99999), "未知错误");
+    }
+
+    /// 验证 baidu_error 格式化包含中文文案和错误码
+    #[test]
+    fn test_baidu_error_format() {
+        let err = baidu_error("预上传失败", -6);
+        match err {
+            CloudSyncError::Api(msg) => {
+                assert!(msg.contains("预上传失败"), "msg = {}", msg);
+                assert!(msg.contains("登录已过期"), "msg = {}", msg);
+                assert!(msg.contains("-6"), "msg = {}", msg);
+            }
+            _ => panic!("expected CloudSyncError::Api"),
+        }
     }
 }
 
