@@ -617,6 +617,33 @@ pub fn download(params_json: &str) -> Result<String, String> {
     // Apply
     let export_data: FullExportData = serde_json::from_value(payload.config.clone())
         .map_err(|e| format!("parse config: {}", e))?;
+
+    // Before applying, ensure the credential store is unlocked with the
+    // download password. This handles two cases:
+    // 1. Store in pending mode (no credentials.enc) → initialize with
+    //    download password, so apply_full_export's save() calls write
+    //    to encrypted credentials.enc instead of plaintext JSON.
+    // 2. Store locked (credentials.enc exists but not unlocked) → unlock
+    //    with download password, so save() calls succeed and persist.
+    //    (If download password ≠ old local password, unlock fails — but
+    //    apply_full_export saves to in-memory store which is lost on
+    //    restart. User would need to re-enter passwords. This is
+    //    acceptable because mismatched passwords are an edge case.)
+    {
+        let store = crate::credential::android_credential_store();
+        if store.is_pending() {
+            let _ = store.initialize(&master_password);
+        } else if !store.is_unlocked() {
+            // Try to unlock with download password. If it fails (wrong
+            // password), reset to pending and re-initialize with the
+            // download password so credentials persist encrypted.
+            if store.unlock(&master_password).is_err() {
+                let _ = store.reset();
+                let _ = store.initialize(&master_password);
+            }
+        }
+    }
+
     apply_full_export(&export_data)?;
 
     // Update sync state — record config.json mtime AFTER apply, so that
