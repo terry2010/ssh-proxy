@@ -64,6 +64,9 @@ fun CloudSyncSection() {
     // Cached master password for force download after overwrite confirmation
     // (avoids re-prompting user for password after 2nd confirm)
     var pendingDownloadPassword by remember { mutableStateOf<String?>(null) }
+    // Password mismatch dialog (upload with different password than last sync):
+    // provider + cached_password
+    var showPasswordMismatchDialog by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     // Collect OAuth events (deep link callback)
     LaunchedEffect(Unit) {
@@ -207,9 +210,14 @@ fun CloudSyncSection() {
                         // Conflict — close password dialog, show conflict confirmation
                         showUploadDialog = null
                         showConflictDialog = Pair(p, resp.reason ?: "conflict")
+                    } else if (resp.reason == "password_mismatch") {
+                        // Password mismatch — close password dialog, show confirmation
+                        showUploadDialog = null
+                        showPasswordMismatchDialog = Pair(p, pw)
                     } else {
                         msg = "上传失败：${resp.message ?: resp.reason ?: "未知错误"}"
                         showUploadDialog = null
+                        Toast.makeText(context, "上传失败：${resp.message ?: resp.reason ?: "未知错误"}", Toast.LENGTH_LONG).show()
                     }
                 }
             },
@@ -431,6 +439,60 @@ fun CloudSyncSection() {
                     showOverwriteSecondDialog = null
                     pendingDownloadPassword = null
                 }) { Text("取消") }
+            },
+        )
+    }
+
+    // Password mismatch confirmation dialog (upload with different password)
+    if (showPasswordMismatchDialog != null) {
+        val provider = showPasswordMismatchDialog!!.first
+        val cachedPw = showPasswordMismatchDialog!!.second
+        AlertDialog(
+            onDismissRequest = { showPasswordMismatchDialog = null },
+            title = { Text("更换云端密码？") },
+            text = {
+                Text(
+                    "输入的密码与上次云同步使用的密码不一致。\n\n" +
+                    "继续上传将用新密码加密云端数据，其他设备需要使用新密码才能下载。\n\n" +
+                    "是否更换云端密码？",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val p = provider
+                        val pw = cachedPw
+                        showPasswordMismatchDialog = null
+                        busy = true
+                        scope.launch {
+                            val resp = withContext(Dispatchers.IO) {
+                                CloudSyncManager.upload(p, pw, force = true)
+                            }
+                            busy = false
+                            if (resp.ok) {
+                                val remotePath = if (p == CloudSyncManager.Provider.BAIDU)
+                                    "我的应用/云盘备份/TermFast"
+                                else
+                                    "/TermFast"
+                                msg = "上传成功（${resp.size ?: 0} 字节）\n云端路径：$remotePath"
+                                dropboxStatus = CloudSyncManager.status(CloudSyncManager.Provider.DROPBOX)
+                                baiduStatus = CloudSyncManager.status(CloudSyncManager.Provider.BAIDU)
+                            } else if (resp.conflict) {
+                                showConflictDialog = Pair(p, resp.reason ?: "conflict")
+                            } else {
+                                msg = "上传失败：${resp.message ?: resp.reason ?: "未知错误"}"
+                                Toast.makeText(context, "上传失败：${resp.message ?: resp.reason ?: "未知错误"}", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) { Text("更换密码并上传") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPasswordMismatchDialog = null }) { Text("取消") }
             },
         )
     }

@@ -380,13 +380,21 @@ pub fn upload(params_json: &str) -> Result<String, String> {
         .to_string();
     let force = params["force"].as_bool().unwrap_or(false);
 
-    // Security: verify the master password can unlock the local credential
-    // store before uploading. This prevents accidental wrong-password uploads
-    // which would make the cloud backup undecryptable on other devices.
-    let store = crate::credential::android_credential_store();
-    if store.is_initialized() {
-        store.unlock(&master_password)
-            .map_err(|_| "主密码错误，无法解锁本地凭据存储".to_string())?;
+    // Password change detection: compare input password hash with stored hash.
+    // If they differ, return password_mismatch so the frontend can ask the
+    // user to confirm the cloud password change.
+    let hash_path = data_dir().join("sync_hash.dat");
+    let input_hash = sync_crypto::password_hash(&master_password);
+    if !force {
+        if let Some(stored_hash) = sync_crypto::load_password_hash(&hash_path) {
+            if stored_hash != input_hash {
+                return Ok(serde_json::json!({
+                    "ok": false,
+                    "reason": "password_mismatch",
+                    "message": "输入的密码与上次云同步使用的密码不一致。\n继续上传将用新密码加密云端数据，其他设备需要使用新密码才能下载。\n是否更换云端密码？",
+                }).to_string());
+            }
+        }
     }
 
     // Load token
@@ -460,6 +468,8 @@ pub fn upload(params_json: &str) -> Result<String, String> {
     let prov = provider.clone();
     let dn = device_name.clone();
     let ua = updated_at.clone();
+    let hash_path_clone = hash_path.clone();
+    let input_hash_clone = input_hash;
     let _ = std::thread::scope(|s| {
         s.spawn(move || {
             let mut st = sync_state::load_state(&state_path, &mp);
@@ -473,6 +483,9 @@ pub fn upload(params_json: &str) -> Result<String, String> {
         })
         .join()
     });
+
+    // Save password hash so future uploads can detect password changes.
+    sync_crypto::save_password_hash(&hash_path, &input_hash);
 
     Ok(serde_json::json!({ "ok": true, "size": blob.len() }).to_string())
 }
@@ -669,6 +682,11 @@ pub fn download(params_json: &str) -> Result<String, String> {
         })
         .join()
     });
+
+    // Download success — update stored password hash to the download password,
+    // so future uploads don't warn about password mismatch.
+    let hash_path = data_dir().join("sync_hash.dat");
+    sync_crypto::save_password_hash(&hash_path, &sync_crypto::password_hash(&master_password));
 
     Ok(serde_json::json!({
         "ok": true,

@@ -53,6 +53,42 @@ const KEY_LEN: usize = 32;
 /// Max password byte length after NFKC normalization.
 const MAX_PASSWORD_LEN: usize = 1024;
 
+/// Compute a hash of the master password for comparison purposes.
+/// Uses NFKC normalization (same as encryption) + SHA-256.
+/// This hash is stored locally to detect password changes across
+/// upload/download operations. It is NOT used for encryption.
+pub fn password_hash(password: &str) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let normalized: String = password.nfkc().collect();
+    let mut hasher = Sha256::new();
+    hasher.update(normalized.as_bytes());
+    let result = hasher.finalize();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&result);
+    out
+}
+
+/// Save the password hash to a file (plaintext, 32 bytes).
+pub fn save_password_hash(path: &std::path::Path, hash: &[u8; 32]) {
+    let _ = std::fs::write(path, hash);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+}
+
+/// Load the password hash from a file. Returns None if file doesn't exist.
+pub fn load_password_hash(path: &std::path::Path) -> Option<[u8; 32]> {
+    let data = std::fs::read(path).ok()?;
+    if data.len() != 32 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&data);
+    Some(out)
+}
+
 /// Wrapper JSON stored inside the encrypted config file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncPayload {

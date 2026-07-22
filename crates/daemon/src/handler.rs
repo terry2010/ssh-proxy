@@ -3279,6 +3279,14 @@ fn sync_state_path(_state: &DaemonState) -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("sync_state.enc"))
 }
 
+/// Path to the password hash file (plaintext 32-byte SHA-256).
+/// Used to detect password changes between upload/download operations.
+fn sync_hash_path(_state: &DaemonState) -> std::path::PathBuf {
+    directories::BaseDirs::new()
+        .map(|d| d.config_dir().join("termfast").join("sync_hash.dat"))
+        .unwrap_or_else(|| std::path::PathBuf::from("sync_hash.dat"))
+}
+
 /// Path to the local config.json file.
 fn local_config_path(_state: &DaemonState) -> std::path::PathBuf {
     // Must match the path used by FileConfigStorage::default_path()
@@ -3472,8 +3480,25 @@ async fn handle_cloud_sync_upload(
         .as_str()
         .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing master_password"))?
         .to_string();
-    // force=true skips conflict detection (used after user confirms overwrite)
+    // force=true skips conflict detection AND password mismatch warning
     let force = params["force"].as_bool().unwrap_or(false);
+
+    // Password change detection: compare input password hash with stored hash.
+    // If they differ, return password_mismatch so the frontend can ask the
+    // user to confirm the cloud password change.
+    let hash_path = sync_hash_path(state);
+    let input_hash = termfast_cloud_sync::sync_crypto::password_hash(&master_password);
+    if !force {
+        if let Some(stored_hash) = termfast_cloud_sync::sync_crypto::load_password_hash(&hash_path) {
+            if stored_hash != input_hash {
+                return Ok(serde_json::json!({
+                    "ok": false,
+                    "reason": "password_mismatch",
+                    "message": "输入的密码与上次云同步使用的密码不一致。\n继续上传将用新密码加密云端数据，其他设备需要使用新密码才能下载。\n是否更换云端密码？",
+                }));
+            }
+        }
+    }
 
     // Load cloud token
     let path = token_file_path(state);
@@ -3560,6 +3585,9 @@ async fn handle_cloud_sync_upload(
         termfast_cloud_sync::sync_state::save_state(&state_path, &mp, &st)
     })
     .await;
+
+    // Save password hash so future uploads can detect password changes.
+    termfast_cloud_sync::sync_crypto::save_password_hash(&hash_path, &input_hash);
 
     Ok(serde_json::json!({ "ok": true, "size": blob.len() }))
 }
@@ -3701,6 +3729,12 @@ async fn handle_cloud_sync_download(
         termfast_cloud_sync::sync_state::save_state(&state_path, &mp, &st)
     })
     .await;
+
+    // Download success — update stored password hash to the download password,
+    // so future uploads don't warn about password mismatch.
+    let hash_path = sync_hash_path(state);
+    let dl_hash = termfast_cloud_sync::sync_crypto::password_hash(&master_password);
+    termfast_cloud_sync::sync_crypto::save_password_hash(&hash_path, &dl_hash);
 
     Ok(serde_json::json!({
         "ok": true,

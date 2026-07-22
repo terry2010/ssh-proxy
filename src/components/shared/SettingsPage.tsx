@@ -1117,15 +1117,20 @@ function CloudSyncSection() {
     }
   };
 
-  const upload = async (masterPassword?: string) => {
+  const upload = async (masterPassword?: string, force = false) => {
     setBusy(true);
     try {
+      let res: { ok?: boolean; reason?: string; message?: string; conflict?: boolean; size?: number };
       try {
-        await ipcInvoke("ipc_cloud_sync_upload", {
-          provider,
-          sync_path: syncPath || undefined,
-          master_password: masterPassword,
-        });
+        res = await ipcInvoke<{ ok?: boolean; reason?: string; message?: string; conflict?: boolean; size?: number }>(
+          "ipc_cloud_sync_upload",
+          {
+            provider,
+            sync_path: syncPath || undefined,
+            master_password: masterPassword,
+            force,
+          },
+        );
       } catch (e) {
         const msg = String(e);
         if (msg.includes("master password not available")) {
@@ -1137,14 +1142,47 @@ function CloudSyncSection() {
         }
         if (msg.includes("expired") || msg.includes("401")) {
           await ipcInvoke("ipc_cloud_sync_refresh_token", { provider });
-          await ipcInvoke("ipc_cloud_sync_upload", {
-            provider,
-            sync_path: syncPath || undefined,
-            master_password: masterPassword,
-          });
+          res = await ipcInvoke<{ ok?: boolean; reason?: string; message?: string; conflict?: boolean; size?: number }>(
+            "ipc_cloud_sync_upload",
+            {
+              provider,
+              sync_path: syncPath || undefined,
+              master_password: masterPassword,
+              force,
+            },
+          );
         } else {
           throw e;
         }
+      }
+      // Handle password mismatch — ask user to confirm cloud password change
+      if (res.ok === false && res.reason === "password_mismatch") {
+        // Use window.confirm for simplicity (Tauri webview supports it)
+        const confirmed = await confirm(
+          res.message || "输入的密码与上次云同步使用的密码不一致。继续上传将用新密码加密云端数据。是否更换云端密码？"
+        );
+        if (confirmed) {
+          // Re-upload with force=true to skip the mismatch warning
+          await upload(masterPassword, true);
+          return;
+        } else {
+          return;
+        }
+      }
+      if (res.ok === false && res.reason === "conflict") {
+        // Conflict — ask user to force upload
+        const confirmed = await confirm(
+          res.message || "云端数据已被其他设备更新，是否覆盖？"
+        );
+        if (confirmed) {
+          await upload(masterPassword, true);
+          return;
+        } else {
+          return;
+        }
+      }
+      if (res.ok === false) {
+        throw new Error(res.message || res.reason || "上传失败");
       }
       const remotePath = provider === "baidu"
         ? "我的应用/云盘备份/TermFast"
