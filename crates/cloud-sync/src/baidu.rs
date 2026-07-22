@@ -377,12 +377,26 @@ impl CloudProviderTrait for BaiduProvider {
         token: &OAuthToken,
         path: &str,
     ) -> Result<RemoteFileInfo, CloudSyncError> {
-        let path = baidu_path(path);
+        let full_path = baidu_path(path);
+        // Split into parent dir + filename, then use method=list to find the file.
+        // (method=meta requires fsids, not path — unusable for path-based lookup.)
+        let (dir, filename) = match full_path.rsplit_once('/') {
+            Some((d, f)) if !d.is_empty() && !f.is_empty() => (d, f),
+            _ => {
+                return Ok(RemoteFileInfo {
+                    exists: false,
+                    size: None,
+                    hash: None,
+                    modified: None,
+                });
+            }
+        };
+
         let client = reqwest_client();
         let url = format!(
-            "{}/rest/2.0/xpan/multimedia?method=meta&path={}&access_token={}",
+            "{}/rest/2.0/xpan/file?method=list&dir={}&access_token={}",
             PAN_BASE,
-            urlencoding::encode(&path),
+            urlencoding::encode(dir),
             urlencoding::encode(&token.access_token),
         );
 
@@ -392,7 +406,6 @@ impl CloudProviderTrait for BaiduProvider {
 
         let status = resp.status();
         if status == reqwest::StatusCode::NOT_FOUND {
-            // File doesn't exist
             return Ok(RemoteFileInfo {
                 exists: false,
                 size: None,
@@ -420,7 +433,8 @@ impl CloudProviderTrait for BaiduProvider {
             });
         }
 
-        let info = meta.list.first();
+        // Find the file matching our target filename in the directory listing
+        let info = meta.list.iter().find(|f| f.filename.as_deref() == Some(filename));
         Ok(RemoteFileInfo {
             exists: info.is_some(),
             size: info.map(|f| f.size),
@@ -488,6 +502,8 @@ struct BaiduFileInfo {
     #[serde(default)]
     md5: Option<String>,
     local_mtime: i64,
+    #[serde(default)]
+    filename: Option<String>,
 }
 
 /// Baidu OAuth token response (Authorization Code flow)
@@ -628,6 +644,33 @@ mod tests {
         let meta: BaiduFileMeta = serde_json::from_str(json).unwrap();
         assert_ne!(meta.errno, 0);
         assert!(meta.list.is_empty());
+    }
+
+    /// 验证 file_info 用 method=list + filename 匹配的逻辑：
+    /// 目录下有多个文件时，只匹配目标 filename 的那个
+    #[test]
+    fn test_baidu_file_info_list_filename_match() {
+        let json = r#"{
+            "errno": 0,
+            "list": [
+                {"size": 100, "filename": "other.bin", "local_mtime": 1000},
+                {"size": 2048, "filename": "config.enc", "md5": "abc123", "local_mtime": 1721568000}
+            ]
+        }"#;
+        let meta: BaiduFileMeta = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.errno, 0);
+        // 模拟 file_info 里 find(filename == "config.enc") 的逻辑
+        let target = "config.enc";
+        let info = meta.list.iter().find(|f| f.filename.as_deref() == Some(target));
+        assert!(info.is_some());
+        let info = info.unwrap();
+        assert_eq!(info.size, 2048);
+        assert_eq!(info.md5.as_deref(), Some("abc123"));
+        assert_eq!(info.filename.as_deref(), Some("config.enc"));
+        // 确认不会误匹配 other.bin
+        let wrong = meta.list.iter().find(|f| f.filename.as_deref() == Some("other.bin"));
+        assert!(wrong.is_some());
+        assert_ne!(wrong.unwrap().size, 2048);
     }
 
     /// 验证百度错误码翻译为用户友好文案
