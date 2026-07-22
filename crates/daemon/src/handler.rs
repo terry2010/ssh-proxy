@@ -3177,27 +3177,47 @@ mod tests {
         assert!(resp["message"].as_str().unwrap().contains("没有同步数据"));
     }
 
-    /// 11.3 补充: is_no_update — hash 一致时返回 true
+    /// 11.3 补充: is_no_update — hash 一致且 mtime 一致时返回 true
     #[test]
     fn test_is_no_update_hash_match() {
         let remote = make_remote(true, Some("abc123"));
-        assert!(is_no_update(&remote, Some("abc123")));
+        assert!(is_no_update(&remote, Some("abc123"), Some("1000"), Some("1000")));
     }
 
     /// 11.3 补充: is_no_update — hash 不一致时返回 false
     #[test]
     fn test_is_no_update_hash_mismatch() {
         let remote = make_remote(true, Some("abc123"));
-        assert!(!is_no_update(&remote, Some("different")));
+        assert!(!is_no_update(&remote, Some("different"), Some("1000"), Some("1000")));
     }
 
     /// 11.3 补充: is_no_update — 任一 hash 缺失时返回 false
     #[test]
     fn test_is_no_update_missing_hash() {
         let remote_no_hash = make_remote(true, None);
-        assert!(!is_no_update(&remote_no_hash, Some("abc")));
+        assert!(!is_no_update(&remote_no_hash, Some("abc"), Some("1000"), Some("1000")));
         let remote_with_hash = make_remote(true, Some("abc"));
-        assert!(!is_no_update(&remote_with_hash, None));
+        assert!(!is_no_update(&remote_with_hash, None, Some("1000"), Some("1000")));
+    }
+
+    /// is_no_update — hash 匹配但本地 mtime 变了（本地有修改）→ 返回 false
+    /// 这是核心修复：用户新建节点后本地 config.json mtime 变了，
+    /// 即使云端 hash 没变也不应阻止下载。
+    #[test]
+    fn test_is_no_update_local_mtime_changed() {
+        let remote = make_remote(true, Some("abc123"));
+        // hash 匹配，但 mtime 从 1000 变成了 2000（本地被修改过）
+        assert!(!is_no_update(&remote, Some("abc123"), Some("1000"), Some("2000")));
+    }
+
+    /// is_no_update — mtime 缺失时返回 false（允许下载，安全默认）
+    #[test]
+    fn test_is_no_update_missing_mtime() {
+        let remote = make_remote(true, Some("abc123"));
+        // hash 匹配，但 mtime 信息缺失
+        assert!(!is_no_update(&remote, Some("abc123"), None, Some("1000")));
+        assert!(!is_no_update(&remote, Some("abc123"), Some("1000"), None));
+        assert!(!is_no_update(&remote, Some("abc123"), None, None));
     }
 }
 
@@ -3281,6 +3301,26 @@ fn sync_state_path(_state: &DaemonState) -> std::path::PathBuf {
     directories::BaseDirs::new()
         .map(|d| d.config_dir().join("termfast").join("sync_state.enc"))
         .unwrap_or_else(|| std::path::PathBuf::from("sync_state.enc"))
+}
+
+/// Path to the local config.json file.
+fn local_config_path(_state: &DaemonState) -> std::path::PathBuf {
+    directories::BaseDirs::new()
+        .map(|d| d.config_dir().join("termfast").join("config.json"))
+        .unwrap_or_else(|| std::path::PathBuf::from("config.json"))
+}
+
+/// Get the mtime (unix epoch seconds) of the local config.json file.
+/// Returns None if the file doesn't exist or mtime can't be read.
+fn local_config_mtime(state: &DaemonState) -> Option<String> {
+    let path = local_config_path(state);
+    let meta = std::fs::metadata(&path).ok()?;
+    let mtime = meta.modified().ok()?;
+    let secs = mtime
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(secs.to_string())
 }
 
 /// Get the sync file path on cloud storage.
@@ -3524,13 +3564,20 @@ async fn handle_cloud_sync_upload(
 
     let new_hash = new_info.hash.unwrap_or_default();
 
-    // Update sync state — on blocking thread
+    // Update sync state — record local config mtime so we can detect
+    // local modifications on future downloads.
     let state_path = sync_state_path(state);
+    let config_path = local_config_path(state);
     let mp = master_password.clone();
     let prov = provider.clone();
     let _ = tokio::task::spawn_blocking(move || {
         let mut st = termfast_cloud_sync::sync_state::load_state(&state_path, &mp);
-        st.set_sync_info(&prov, new_hash, device_name, updated_at);
+        let local_mtime = std::fs::metadata(&config_path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs().to_string());
+        st.set_sync_info(&prov, new_hash, device_name, updated_at, local_mtime);
         termfast_cloud_sync::sync_state::save_state(&state_path, &mp, &st)
     })
     .await;
@@ -3585,10 +3632,17 @@ async fn handle_cloud_sync_download(
 
     let local_hash = sync_state.last_hash(&provider);
     let local_updated_at = sync_state.last_sync_info(&provider).updated_at;
+    let last_local_mtime = sync_state.last_local_mtime(&provider).map(String::from);
+    let current_local_mtime = local_config_mtime(state);
 
-    // If hash matches, no update needed — unless force_download is set,
-    // in which case we proceed to download anyway (user confirmed overwrite).
-    if !force_download && is_no_update(&remote_info, local_hash) {
+    // If both cloud and local are unchanged since last sync, no update needed.
+    // force_download=true skips this check (user confirmed overwrite).
+    if !force_download && is_no_update(
+        &remote_info,
+        local_hash,
+        last_local_mtime.as_deref(),
+        current_local_mtime.as_deref(),
+    ) {
         return Ok(build_no_update_response(
             remote_info.modified.as_deref(),
             local_updated_at.as_deref(),
@@ -3633,16 +3687,24 @@ async fn handle_cloud_sync_download(
             .map_err(|e| IpcError::new(ErrorCode::Internal, format!("parse config: {}", e)))?;
     apply_full_export(state, &export_data).await?;
 
-    // Update sync state
+    // Update sync state — record the config.json mtime AFTER apply, so that
+    // on next download we can detect if the local config has been modified since.
     let new_hash = remote_info.hash.unwrap_or_default();
     let device_name = payload.device_name.clone();
     let updated_at = payload.updated_at.clone();
     let state_path = sync_state_path(state);
+    let config_path = local_config_path(state);
     let mp = master_password.clone();
     let prov = provider.clone();
     let _ = tokio::task::spawn_blocking(move || {
         let mut st = termfast_cloud_sync::sync_state::load_state(&state_path, &mp);
-        st.set_sync_info(&prov, new_hash, device_name, updated_at);
+        // Read config.json mtime after apply (it was just written, so mtime = now)
+        let local_mtime = std::fs::metadata(&config_path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs().to_string());
+        st.set_sync_info(&prov, new_hash, device_name, updated_at, local_mtime);
         termfast_cloud_sync::sync_state::save_state(&state_path, &mp, &st)
     })
     .await;
@@ -3924,14 +3986,33 @@ pub fn build_decrypt_failed_response() -> serde_json::Value {
     })
 }
 
-/// Check if download should return "no update" because remote hash matches local cache.
-/// Returns true if hashes match (no update needed), false otherwise.
+/// Check if download should return "no update" because both cloud and local
+/// are unchanged since last sync.
+///
+/// Returns true only if ALL of:
+/// 1. Cloud hash matches the hash recorded at last sync (cloud unchanged)
+/// 2. Local config mtime matches the mtime recorded at last sync (local unchanged)
+///
+/// If either side has changed, returns false — download should proceed.
+/// This prevents the bug where local edits (new node, changed password, etc.)
+/// were incorrectly blocked by no_update just because the cloud file hadn't changed.
 pub fn is_no_update(
     remote_info: &termfast_cloud_sync::RemoteFileInfo,
     local_hash: Option<&str>,
+    last_local_mtime: Option<&str>,
+    current_local_mtime: Option<&str>,
 ) -> bool {
-    match (&remote_info.hash, local_hash) {
+    // Cloud unchanged?
+    let cloud_unchanged = match (&remote_info.hash, local_hash) {
         (Some(rh), Some(lh)) => rh == lh,
+        _ => false,
+    };
+    if !cloud_unchanged {
+        return false;
+    }
+    // Local unchanged? (if we don't have mtime info, err on side of allowing download)
+    match (last_local_mtime, current_local_mtime) {
+        (Some(last), Some(cur)) => last == cur,
         _ => false,
     }
 }

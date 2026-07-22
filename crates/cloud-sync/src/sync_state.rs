@@ -27,6 +27,13 @@ pub struct ProviderState {
     /// Timestamp of the last sync (RFC 3339).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_updated_at: Option<String>,
+    /// mtime (unix epoch seconds, as string) of the local config.json file
+    /// at the time of last sync. Used to detect local modifications since
+    /// last sync — if this differs from the current config.json mtime,
+    /// the local data has changed and download should not be blocked
+    /// by no_update even if the cloud hash is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_local_mtime: Option<String>,
 }
 
 /// The full sync state, mapping provider name → state.
@@ -69,6 +76,11 @@ impl SyncState {
         self.get(provider).last_hash.as_deref()
     }
 
+    /// Get the last-recorded local config mtime for a provider.
+    pub fn last_local_mtime(&self, provider: &str) -> Option<&str> {
+        self.get(provider).last_local_mtime.as_deref()
+    }
+
     /// Record sync info (hash + metadata) for a provider.
     pub fn set_sync_info(
         &mut self,
@@ -76,11 +88,13 @@ impl SyncState {
         hash: String,
         device_name: String,
         updated_at: String,
+        local_mtime: Option<String>,
     ) {
         let ps = self.get_mut(provider);
         ps.last_hash = Some(hash);
         ps.last_device_name = Some(device_name);
         ps.last_updated_at = Some(updated_at);
+        ps.last_local_mtime = local_mtime;
     }
 
     /// Get the last sync info (device_name + updated_at) for display.
@@ -181,6 +195,7 @@ mod tests {
             "abc123hash".to_string(),
             "Terry-MacBook".to_string(),
             "2026-07-21T10:00:00Z".to_string(),
+            Some("1784718000".to_string()),
         );
         s
     }
@@ -264,6 +279,7 @@ mod tests {
             "md5hash123".to_string(),
             "Terry-iPhone".to_string(),
             "2026-07-20T18:30:00Z".to_string(),
+            Some("1784717000".to_string()),
         );
         assert_eq!(state.last_hash("baidu"), Some("md5hash123"));
         let info = state.last_sync_info("baidu");

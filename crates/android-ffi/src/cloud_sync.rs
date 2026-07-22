@@ -67,6 +67,24 @@ pub fn sync_state_path() -> PathBuf {
     data_dir().join("sync_state.enc")
 }
 
+/// Path to the local config.json file.
+fn local_config_path() -> PathBuf {
+    data_dir().join("config.json")
+}
+
+/// Get the mtime (unix epoch seconds) of the local config.json file.
+/// Returns None if the file doesn't exist or mtime can't be read.
+fn local_config_mtime() -> Option<String> {
+    let path = local_config_path();
+    let meta = std::fs::metadata(&path).ok()?;
+    let mtime = meta.modified().ok()?;
+    let secs = mtime
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(secs.to_string())
+}
+
 /// Build a provider instance from the provider type string.
 fn build_provider(
     provider: &str,
@@ -425,8 +443,10 @@ pub fn upload(params_json: &str) -> Result<String, String> {
         .map_err(|e| format!("file_info after upload: {}", e))?;
     let new_hash = new_info.hash.unwrap_or_default();
 
-    // Update sync state
+    // Update sync state — record local config mtime so we can detect
+    // local modifications on future downloads.
     let state_path = sync_state_path();
+    let config_path = local_config_path();
     let mp = master_password.clone();
     let prov = provider.clone();
     let dn = device_name.clone();
@@ -434,7 +454,12 @@ pub fn upload(params_json: &str) -> Result<String, String> {
     let _ = std::thread::scope(|s| {
         s.spawn(move || {
             let mut st = sync_state::load_state(&state_path, &mp);
-            st.set_sync_info(&prov, new_hash, dn, ua);
+            let local_mtime = std::fs::metadata(&config_path)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs().to_string());
+            st.set_sync_info(&prov, new_hash, dn, ua, local_mtime);
             sync_state::save_state(&state_path, &mp, &st)
         })
         .join()
@@ -497,20 +522,31 @@ pub fn download(params_json: &str) -> Result<String, String> {
     let sync_state = sync_state;
     let local_hash = sync_state.last_hash(&provider);
     let local_updated_at = sync_state.last_sync_info(&provider).updated_at;
+    let last_local_mtime = sync_state.last_local_mtime(&provider).map(String::from);
+    let current_local_mtime = local_config_mtime();
 
-    // If hash matches, no update needed — unless force_download is set,
-    // in which case we proceed to download anyway (user confirmed overwrite).
+    // If both cloud and local are unchanged since last sync, no update needed.
+    // force_download=true skips this check (user confirmed overwrite).
+    // Checking local mtime prevents false "no_update" when user has edited
+    // local data (new node, changed password, etc.) since last sync.
     if !force_download {
         if let (Some(rh), Some(lh)) = (&remote_info.hash, local_hash) {
             if rh == lh {
-                return Ok(serde_json::json!({
-                    "ok": false,
-                    "reason": "no_update",
-                    "message": "云端无更新",
-                    "cloud_updated_at": remote_info.modified,
-                    "local_updated_at": local_updated_at,
-                })
-                .to_string());
+                // Cloud unchanged — now check if local is also unchanged
+                let local_unchanged = match (&last_local_mtime, &current_local_mtime) {
+                    (Some(last), Some(cur)) => last == cur,
+                    _ => false,  // missing mtime info → allow download (safe default)
+                };
+                if local_unchanged {
+                    return Ok(serde_json::json!({
+                        "ok": false,
+                        "reason": "no_update",
+                        "message": "云端无更新",
+                        "cloud_updated_at": remote_info.modified,
+                        "local_updated_at": local_updated_at,
+                    })
+                    .to_string());
+                }
             }
         }
     }
@@ -558,17 +594,25 @@ pub fn download(params_json: &str) -> Result<String, String> {
         .map_err(|e| format!("parse config: {}", e))?;
     apply_full_export(&export_data)?;
 
-    // Update sync state
+    // Update sync state — record config.json mtime AFTER apply, so that
+    // on next download we can detect if local config has been modified.
     let new_hash = remote_info.hash.unwrap_or_default();
     let device_name = payload.device_name.clone();
     let updated_at = payload.updated_at.clone();
     let state_path = sync_state_path();
+    let config_path = local_config_path();
     let mp = master_password.clone();
     let prov = provider.clone();
     let _ = std::thread::scope(|s| {
         s.spawn(move || {
             let mut st = sync_state::load_state(&state_path, &mp);
-            st.set_sync_info(&prov, new_hash, device_name, updated_at);
+            // Read config.json mtime after apply (it was just written, so mtime = now)
+            let local_mtime = std::fs::metadata(&config_path)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs().to_string());
+            st.set_sync_info(&prov, new_hash, device_name, updated_at, local_mtime);
             sync_state::save_state(&state_path, &mp, &st)
         })
         .join()
