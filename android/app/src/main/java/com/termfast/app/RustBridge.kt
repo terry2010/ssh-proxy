@@ -90,4 +90,14 @@ object RustBridge {
     external fun nativeWriteTerminal(sessionId: String, data: String): Boolean
     external fun nativeCloseTerminal(sessionId: String): Boolean
     external fun nativeResizeTerminal(sessionId: String, cols: Int, rows: Int): Boolean
+
+    // --- Cloud Sync ---
+    external fun nativeCloudSyncAuthUrl(provider: String): String
+    external fun nativeCloudSyncExchangeCode(code: String): String
+    external fun nativeCloudSyncSaveToken(tokenJson: String): Boolean
+    external fun nativeCloudSyncLoadToken(provider: String): String
+    external fun nativeCloudSyncUpload(paramsJson: String): String
+    external fun nativeCloudSyncDownload(paramsJson: String): String
+    external fun nativeCloudSyncStatus(provider: String): String
+    external fun nativeCloudSyncDisconnect(provider: String): Boolean
 }

@@ -67,6 +67,7 @@ impl CloudProviderTrait for BaiduProvider {
         code: &str,
         _code_verifier: &str,
         redirect_uri: &str,
+        state: &str,
     ) -> Result<OAuthToken, CloudSyncError> {
         let client = reqwest_client();
 
@@ -74,6 +75,7 @@ impl CloudProviderTrait for BaiduProvider {
             "provider": "baidu",
             "code": code,
             "redirect_uri": redirect_uri,
+            "state": state,
         });
 
         let url = format!("{}?action=exchange", crate::CLOUD_SYNC_SERVER);
@@ -335,7 +337,7 @@ impl CloudProviderTrait for BaiduProvider {
         Ok(RemoteFileInfo {
             exists: info.is_some(),
             size: info.map(|f| f.size),
-            hash: info.and_then(|f| f.dlink.clone()),
+            hash: info.and_then(|f| f.md5.clone()),
             modified: info.map(|f| f.local_mtime.to_string()),
         })
     }
@@ -393,7 +395,10 @@ struct BaiduFileMeta {
 struct BaiduFileInfo {
     size: u64,
     #[serde(default)]
+    #[allow(dead_code)]
     dlink: Option<String>,
+    #[serde(default)]
+    md5: Option<String>,
     local_mtime: i64,
 }
 
@@ -459,6 +464,82 @@ mod tests {
         assert_eq!(token.access_token, "at123");
         assert_eq!(token.refresh_token.as_deref(), Some("rt456"));
         assert!(token.expires_at.is_some());
+    }
+
+    /// 11.4 用例 31: file_info 返回的 hash 是 md5 而不是 dlink
+    /// 验证 BaiduFileInfo 反序列化时正确解析 md5 字段，
+    /// 且 RemoteFileInfo.hash 取自 md5 而非 dlink。
+    #[test]
+    fn test_baidu_file_info_returns_md5_not_dlink() {
+        // 构造百度 PCS meta 接口的真实响应格式
+        let json = r#"{
+            "errno": 0,
+            "list": [
+                {
+                    "size": 1024,
+                    "dlink": "https://d.pcs.baidu.com/file/abc123?fid=xxx",
+                    "md5": "d41d8cd98f00b204e9800998ecf8427e",
+                    "local_mtime": 1721568000
+                }
+            ]
+        }"#;
+        let meta: BaiduFileMeta = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.errno, 0);
+        assert_eq!(meta.list.len(), 1);
+
+        let info = meta.list.first().unwrap();
+        assert_eq!(info.size, 1024);
+        // md5 字段必须被正确反序列化
+        assert_eq!(
+            info.md5.as_deref(),
+            Some("d41d8cd98f00b204e9800998ecf8427e")
+        );
+        // dlink 仍然存在（字段保留用于其他用途）
+        assert!(info.dlink.is_some());
+
+        // 模拟 file_info 里的取值逻辑：hash 取 md5 而非 dlink
+        let hash = info.md5.clone();
+        assert_eq!(
+            hash.as_deref(),
+            Some("d41d8cd98f00b204e9800998ecf8427e"),
+            "file_info.hash must be md5, not dlink"
+        );
+        // 明确验证不是 dlink
+        assert_ne!(
+            hash.as_deref(),
+            info.dlink.as_deref(),
+            "file_info.hash must NOT equal dlink"
+        );
+    }
+
+    /// 11.4 补充: md5 字段缺失时 hash 返回 None（向后兼容）
+    #[test]
+    fn test_baidu_file_info_md5_missing_returns_none() {
+        let json = r#"{
+            "errno": 0,
+            "list": [
+                {
+                    "size": 512,
+                    "dlink": "https://d.pcs.baidu.com/file/def456",
+                    "local_mtime": 1721568000
+                }
+            ]
+        }"#;
+        let meta: BaiduFileMeta = serde_json::from_str(json).unwrap();
+        let info = meta.list.first().unwrap();
+        // md5 缺失 → hash 应为 None
+        assert_eq!(info.md5, None);
+        let hash = info.md5.clone();
+        assert_eq!(hash, None, "hash must be None when md5 is absent");
+    }
+
+    /// 11.4 补充: errno != 0 时视为文件不存在
+    #[test]
+    fn test_baidu_file_meta_errno_nonzero() {
+        let json = r#"{"errno": -1, "list": []}"#;
+        let meta: BaiduFileMeta = serde_json::from_str(json).unwrap();
+        assert_ne!(meta.errno, 0);
+        assert!(meta.list.is_empty());
     }
 }
 

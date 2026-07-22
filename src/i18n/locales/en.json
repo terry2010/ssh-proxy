@@ -298,11 +298,6 @@
       "title": "Trigger defaults",
       "desc": "Default timeout, continue_on_error, and IP recheck interval."
     },
-    "data": {
-      "title": "Data management",
-      "export": "Export config",
-      "import": "Import config"
-    },
     "cloud_sync": {
       "title": "Cloud sync",
       "description": "Sync your encrypted config across devices via Dropbox or Baidu Netdisk. Config is encrypted with your master password before upload. OAuth token exchange goes through a proxy server — no secrets stored in the app.",
@@ -314,6 +309,11 @@
       "cloud_path_hint": "For Baidu Netdisk, actual path is /apps/termfast + this path. Leave empty for default.",
       "master_password": "Master password",
       "master_password_placeholder": "Password used to encrypt config for sync",
+      "save": "Save",
+      "password_saved": "Master password saved",
+      "forgot_password": "Forgot password",
+      "forgot_password_title": "Forgot master password",
+      "forgot_password_desc": "The master password cannot be recovered — it is not stored on the server or locally, and is only used to encrypt/decrypt config.\n\nIf you forgot your master password, you can reset credential management and set a new one.\n\nNote: After reset, all previously encrypted server passwords will be cleared and need to be re-added.",
       "upload": "Upload to cloud",
       "download": "Download from cloud",
       "disconnect": "Disconnect",
@@ -322,7 +322,11 @@
       "upload_success": "Config uploaded to cloud",
       "download_success": "Config downloaded and imported from cloud",
       "disconnected": "Disconnected from cloud",
-      "enter_master_password": "Please enter your master password"
+      "enter_master_password": "Please enter your master password",
+      "password_required_title": "Master password required",
+      "password_required_desc": "You must set a master password before {{action}}, otherwise server passwords and config will be exposed! Please enter your master password in the field above.",
+      "disconnect_title": "Confirm disconnect",
+      "disconnect_desc": "After disconnecting, the locally stored OAuth token will be deleted and you will need to re-authorize to sync again.\n\nThe encrypted config file already uploaded to the cloud is unaffected and remains in your netdisk.\n\nAre you sure you want to disconnect?"
     },
     "notification": {
       "title": "Notifications",

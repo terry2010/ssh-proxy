@@ -15,6 +15,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import com.termfast.app.data.CloudSyncManager
 import com.termfast.app.data.CredentialManager
 import com.termfast.app.data.ErrorMessages
 import com.termfast.app.data.RustEvent
@@ -67,6 +68,7 @@ class MainActivity : ComponentActivity() {
         NotificationHelper.ensureChannels(this)
         requestNotificationPermission()
         handleStartVpnIntent(intent)
+        handleOAuthDeepLink(intent)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.auto(
                 android.graphics.Color.TRANSPARENT,
@@ -199,6 +201,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleStartVpnIntent(intent)
+        handleOAuthDeepLink(intent)
     }
 
     private fun handleStartVpnIntent(intent: android.content.Intent) {
@@ -222,6 +225,19 @@ class MainActivity : ComponentActivity() {
                 SshVpnService.start(this, serverId, settings)
                 SshVpnTileService.setLastServerId(this, serverId)
             }
+        }
+    }
+
+    /**
+     * Handle the OAuth deep link callback (termfast://oauth/callback?code=...).
+     * Delegates to CloudSyncManager which exchanges the code and saves the token.
+     */
+    private fun handleOAuthDeepLink(intent: android.content.Intent) {
+        val uri = intent.data ?: return
+        // Only handle termfast://oauth/callback
+        if (uri.scheme != "termfast" || uri.host != "oauth") return
+        CoroutineScope(Dispatchers.IO).launch {
+            CloudSyncManager.handleDeepLink(uri)
         }
     }
 }

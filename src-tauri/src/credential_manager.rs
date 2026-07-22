@@ -238,6 +238,11 @@ pub async fn ipc_try_cached_unlock(
     if state.store.is_unlocked() {
         return Ok(true);
     }
+    // Skip keychain access if credential file doesn't exist —
+    // user has never set a master password, so there's nothing to unlock.
+    if !credential_file_path().exists() {
+        return Ok(false);
+    }
     if let Some(key) = load_cached_key() {
         let store = state.store.clone();
         // decrypt() reads the credential file — run on blocking pool.

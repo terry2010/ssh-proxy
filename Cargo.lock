@@ -6853,10 +6853,12 @@ dependencies = [
  "hex",
  "jni 0.21.1",
  "log",
+ "reqwest 0.12.28",
  "russh",
  "serde",
  "serde_json",
  "socket2 0.5.10",
+ "termfast-cloud-sync",
  "termfast-core",
  "termfast-credential",
  "thiserror 2.0.18",
@@ -6921,7 +6923,9 @@ dependencies = [
 name = "termfast-cloud-sync"
 version = "0.2.16"
 dependencies = [
+ "aes-gcm 0.10.3",
  "anyhow",
+ "argon2 0.5.3",
  "async-trait",
  "base64 0.22.1",
  "chrono",
@@ -6935,8 +6939,10 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "unicode-normalization",
  "url",
  "urlencoding",
+ "zeroize",
 ]
 
 [[package]]
@@ -6986,6 +6992,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "unicode-normalization",
  "uuid",
  "zeroize",
 ]
@@ -7700,6 +7707,15 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-segmentation"

@@ -22,6 +22,10 @@ chrono = { workspace = true }
 async-trait = { workspace = true }
 url = "2"
 urlencoding = "2"
+aes-gcm = "0.10"
+argon2 = "0.5"
+zeroize = { version = "1", features = ["zeroize_derive"] }
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -57,6 +57,7 @@ impl CloudProviderTrait for DropboxProvider {
         code: &str,
         code_verifier: &str,
         redirect_uri: &str,
+        _state: &str,
     ) -> Result<OAuthToken, CloudSyncError> {
         let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).connect_timeout(std::time::Duration::from_secs(10)).build().unwrap_or_else(|_| reqwest::Client::new());
 

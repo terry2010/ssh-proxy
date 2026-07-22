@@ -300,11 +300,6 @@
       "title": "触发器默认值",
       "desc": "默认超时、出错继续和 IP 重检间隔。"
     },
-    "data": {
-      "title": "数据管理",
-      "export": "导出配置",
-      "import": "导入配置"
-    },
     "cloud_sync": {
       "title": "云同步",
       "description": "通过 Dropbox 或百度网盘在多设备间同步加密配置。配置在上传前已用主密码加密。OAuth 令牌交换通过代理服务器进行，App 不存储任何密钥。",
@@ -316,6 +311,11 @@
       "cloud_path_hint": "百度网盘实际路径为 /apps/termfast + 此路径。留空使用默认值。",
       "master_password": "主密码",
       "master_password_placeholder": "用于加密配置同步数据的密码",
+      "save": "保存",
+      "password_saved": "主密码已保存",
+      "forgot_password": "忘记密码",
+      "forgot_password_title": "忘记主密码",
+      "forgot_password_desc": "主密码无法找回，因为它不存储在服务器或本地，仅用于加解密配置。\n\n如果您忘记了主密码，可以重置凭据管理，重新设置新的主密码。\n\n注意：重置后之前加密保存的服务器密码将被清除，需要重新添加。",
       "upload": "上传到云端",
       "download": "从云端下载",
       "disconnect": "断开连接",
@@ -324,7 +324,11 @@
       "upload_success": "配置已上传到云端",
       "download_success": "配置已从云端下载并导入",
       "disconnected": "已断开云端连接",
-      "enter_master_password": "请输入主密码"
+      "enter_master_password": "请输入主密码",
+      "password_required_title": "必须设置主密码",
+      "password_required_desc": "必须设置主密码后才能{{action}}，否则服务器密码和配置会泄漏！请在上方「主密码」输入框中输入您的主密码。",
+      "disconnect_title": "确认断开云端连接",
+      "disconnect_desc": "断开连接后，本地保存的 OAuth 令牌将被删除，您需要重新授权才能再次同步。\n\n云端已上传的加密配置文件不受影响，仍保留在网盘中。\n\n确定要断开连接吗？"
     },
     "notification": {
       "title": "通知",

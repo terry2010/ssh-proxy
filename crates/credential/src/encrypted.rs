@@ -315,7 +315,11 @@ fn read_header(data: &[u8]) -> Result<Header> {
 }
 
 /// Derive a 32-byte key from password + salt using Argon2id.
+/// The password is NFKC-normalized before hashing to ensure cross-platform
+/// consistency (macOS NFD vs iOS NFC etc.).
 fn derive_key(password: &str, salt: &[u8]) -> Result<DerivedKey> {
+    use unicode_normalization::UnicodeNormalization;
+    let normalized: String = password.nfkc().collect();
     let argon2 = Argon2::new(
         argon2::Algorithm::Argon2id,
         argon2::Version::V0x13,
@@ -324,7 +328,7 @@ fn derive_key(password: &str, salt: &[u8]) -> Result<DerivedKey> {
     );
     let mut out = [0u8; KEY_LEN];
     argon2
-        .hash_password_into(password.as_bytes(), salt, &mut out)
+        .hash_password_into(normalized.as_bytes(), salt, &mut out)
         .map_err(|e| anyhow!("argon2 key derivation failed: {}", e))?;
     Ok(DerivedKey::from_slice(&out))
 }

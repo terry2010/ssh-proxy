@@ -12,6 +12,7 @@ name = "termfast_android_ffi"
 [dependencies]
 termfast-core = { workspace = true }
 termfast-credential = { workspace = true }
+termfast-cloud-sync = { workspace = true }
 zeroize = "1"
 tokio = { workspace = true }
 serde = { workspace = true }
@@ -25,6 +26,7 @@ base64 = { workspace = true }
 hex = { workspace = true }
 async-trait = { workspace = true }
 russh = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 
 jni = "0.21"
 socket2 = "0.5"

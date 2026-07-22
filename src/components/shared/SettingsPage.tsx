@@ -36,7 +36,6 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
     { id: "notification", label: t("settings.notification.title") },
     { id: "credentials", label: t("credentials.settings_section") },
     { id: "cloud_sync", label: t("settings.cloud_sync.title") },
-    { id: "data", label: t("settings.data.title") },
     { id: "about", label: t("settings.about.title") },
   ];
 
@@ -163,13 +162,6 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
               }}
             >
               <CloudSyncSection />
-            </div>
-            <div
-              ref={(el) => {
-                sectionRefs.current.data = el;
-              }}
-            >
-              <DataManagementSection />
             </div>
             <div
               ref={(el) => {
@@ -419,41 +411,6 @@ function TriggerDefaultsSection() {
 }
 
 // === SECTION 4 END ===
-
-function DataManagementSection() {
-  const { t } = useTranslation();
-  const Chevron = (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="text-gray-400"
-    >
-      <polyline points="9 18 15 12 9 6" />
-    </svg>
-  );
-  return (
-    <SettingGroup title={t("settings.data.title")}>
-      <button
-        className="w-full text-left"
-        onClick={() => ipcInvoke("ipc_export_config").catch(console.error)}
-      >
-        <SettingItem label={t("settings.data.export")}>{Chevron}</SettingItem>
-      </button>
-      <button
-        className="w-full text-left"
-        onClick={() => ipcInvoke("ipc_import_config").catch(console.error)}
-      >
-        <SettingItem label={t("settings.data.import")}>{Chevron}</SettingItem>
-      </button>
-    </SettingGroup>
-  );
-}
 
 // === SECTION 5 END ===
 
@@ -1104,6 +1061,10 @@ function CloudSyncSection() {
   const [isAuthed, setIsAuthed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [waiting, setWaiting] = useState(false);
+  const [showPasswordWarn, setShowPasswordWarn] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"upload" | "download" | null>(null);
+  const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
 
   const checkAuth = async () => {
     try {
@@ -1153,7 +1114,8 @@ function CloudSyncSection() {
 
   const upload = async () => {
     if (!masterPassword) {
-      toast.error(t("settings.cloud_sync.enter_master_password"));
+      setPendingAction("upload");
+      setShowPasswordWarn(true);
       return;
     }
     setBusy(true);
@@ -1187,7 +1149,8 @@ function CloudSyncSection() {
 
   const download = async () => {
     if (!masterPassword) {
-      toast.error(t("settings.cloud_sync.enter_master_password"));
+      setPendingAction("download");
+      setShowPasswordWarn(true);
       return;
     }
     setBusy(true);
@@ -1223,6 +1186,11 @@ function CloudSyncSection() {
   };
 
   const disconnect = async () => {
+    setShowDisconnectConfirm(true);
+  };
+
+  const confirmDisconnect = async () => {
+    setShowDisconnectConfirm(false);
     setBusy(true);
     try {
       await ipcInvoke("ipc_cloud_sync_disconnect", { provider });
@@ -1308,31 +1276,17 @@ function CloudSyncSection() {
             {t("settings.cloud_sync.connected_status")}
           </div>
 
-          {/* Master password for config encryption */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              {t("settings.cloud_sync.master_password")}
-            </label>
-            <input
-              type="password"
-              value={masterPassword}
-              onChange={(e) => setMasterPassword(e.target.value)}
-              placeholder={t("settings.cloud_sync.master_password_placeholder")}
-              className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm"
-            />
-          </div>
-
           <div className="flex gap-2">
             <button
               onClick={upload}
-              disabled={busy || !masterPassword}
+              disabled={busy}
               className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 disabled:opacity-50"
             >
               {busy ? t("common.loading") : t("settings.cloud_sync.upload")}
             </button>
             <button
               onClick={download}
-              disabled={busy || !masterPassword}
+              disabled={busy}
               className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 disabled:opacity-50"
             >
               {busy ? t("common.loading") : t("settings.cloud_sync.download")}
@@ -1345,7 +1299,121 @@ function CloudSyncSection() {
               {t("settings.cloud_sync.disconnect")}
             </button>
           </div>
+
+          {/* Master password row: label + input + save + forgot */}
+          <div className="flex items-center gap-2">
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
+              {t("settings.cloud_sync.master_password")}
+            </label>
+            <input
+              type="password"
+              value={masterPassword}
+              onChange={(e) => setMasterPassword(e.target.value)}
+              placeholder={t("settings.cloud_sync.master_password_placeholder")}
+              className="flex-1 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm"
+            />
+            <button
+              onClick={() => {
+                if (masterPassword) {
+                  toast.success(t("settings.cloud_sync.password_saved"));
+                }
+              }}
+              disabled={!masterPassword}
+              className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 disabled:opacity-50 whitespace-nowrap"
+            >
+              {t("settings.cloud_sync.save")}
+            </button>
+            <button
+              onClick={() => setShowForgotPassword(true)}
+              className="text-sm text-blue-500 hover:text-blue-600 whitespace-nowrap"
+            >
+              {t("settings.cloud_sync.forgot_password")}
+            </button>
+          </div>
         </div>
+      )}
+
+      {/* Master password warning modal */}
+      {showPasswordWarn && (
+        <Modal
+          title={t("settings.cloud_sync.password_required_title")}
+          onClose={() => setShowPasswordWarn(false)}
+        >
+          <div className="p-6 space-y-4">
+            <h3 className="text-lg font-semibold text-red-600">
+              {t("settings.cloud_sync.password_required_title")}
+            </h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              {t("settings.cloud_sync.password_required_desc", {
+                action: pendingAction === "upload"
+                  ? t("settings.cloud_sync.upload")
+                  : t("settings.cloud_sync.download"),
+              })}
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowPasswordWarn(false)}
+                className="px-4 py-2 rounded-lg bg-blue-500 text-white text-sm font-medium hover:bg-blue-600"
+              >
+                {t("common.ok")}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Disconnect confirmation modal */}
+      {showDisconnectConfirm && (
+        <Modal
+          title={t("settings.cloud_sync.disconnect_title")}
+          onClose={() => setShowDisconnectConfirm(false)}
+        >
+          <div className="p-6 space-y-4">
+            <h3 className="text-lg font-semibold text-red-600">
+              {t("settings.cloud_sync.disconnect_title")}
+            </h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              {t("settings.cloud_sync.disconnect_desc")}
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowDisconnectConfirm(false)}
+                className="px-4 py-2 rounded-lg text-gray-600 dark:text-gray-400 text-sm"
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                onClick={confirmDisconnect}
+                disabled={busy}
+                className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+              >
+                {busy ? t("common.loading") : t("settings.cloud_sync.disconnect")}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Forgot password modal */}
+      {showForgotPassword && (
+        <Modal
+          title={t("settings.cloud_sync.forgot_password_title")}
+          onClose={() => setShowForgotPassword(false)}
+        >
+          <div className="p-6 space-y-4">
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              {t("settings.cloud_sync.forgot_password_desc")}
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowForgotPassword(false)}
+                className="px-4 py-2 rounded-lg bg-blue-500 text-white text-sm font-medium hover:bg-blue-600"
+              >
+                {t("common.ok")}
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
     </section>
   );

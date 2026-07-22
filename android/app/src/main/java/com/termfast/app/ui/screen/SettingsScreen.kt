@@ -116,6 +116,9 @@ fun SettingsScreen(navController: NavController) {
             // Credential security section
             CredentialSection()
 
+            // Cloud sync section
+            CloudSyncSection()
+
             // Notifications section
             SettingsSectionCard(title = "通知", icon = Icons.Filled.Notifications) {
                 NotificationSwitch("连接成功", settings.notify_connect_success) { update { copy(notify_connect_success = it) } }
@@ -528,7 +531,7 @@ private fun ChangePasswordDialog(
 }
 
 @Composable
-private fun SettingsSectionCard(
+internal fun SettingsSectionCard(
     title: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     content: @Composable ColumnScope.() -> Unit,

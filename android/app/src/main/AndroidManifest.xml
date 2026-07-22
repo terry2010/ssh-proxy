@@ -42,6 +42,14 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Cloud Sync OAuth deep link callback -->
+            <!-- cloud-sync-callback.php redirects to termfast://oauth/callback?code=...&state=... -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="termfast" android:host="oauth" android:pathPrefix="/callback" />
+            </intent-filter>
         </activity>
 
         <service

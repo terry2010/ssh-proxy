@@ -12,6 +12,8 @@ use std::sync::OnceLock;
 
 pub mod config;
 pub mod credential;
+pub mod cloud_sync;
+pub mod cloud_sync_logic;
 pub mod event;
 pub mod jni;
 pub mod network;

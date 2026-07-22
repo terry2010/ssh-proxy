@@ -152,6 +152,10 @@ pub enum Action {
     CloudSyncUpload,
     CloudSyncDownload,
     CloudSyncGetFileInfo,
+    /// Get sync status (last sync time + device name) for a provider.
+    /// Params: { provider, master_password }
+    /// Returns: { device_name, updated_at } or empty if no sync history.
+    CloudSyncStatus,
     CloudSyncDeleteRemote,
     CloudSyncDisconnect,
     CloudSyncRefreshToken,

@@ -1484,3 +1484,143 @@ pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeResizeTerminal(
     let _ = rt.block_on(crate::pty_api::resize_session(&session, cols, rows));
     bool_to_jbool(true)
 }
+
+// === Cloud Sync ===
+
+/// Get the OAuth authorization URL for a cloud provider.
+/// Returns a JSON string `{"auth_url":"...","provider":"..."}` or empty string on error.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeCloudSyncAuthUrl(
+    mut env: JNIEnv,
+    _class: JClass,
+    provider: JString,
+) -> jstring {
+    let prov = jstring_to_string(&mut env, &provider);
+    match crate::cloud_sync::auth_url(&prov) {
+        Ok(json) => string_to_jstring(&mut env, &json).into_raw(),
+        Err(e) => {
+            log::error!("cloud_sync_auth_url: {}", e);
+            string_to_jstring(&mut env, "").into_raw()
+        }
+    }
+}
+
+/// Exchange an OAuth code for a token.
+/// `code` comes from the deep-link callback.
+/// Returns a JSON string with token fields, or empty string on error.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeCloudSyncExchangeCode(
+    mut env: JNIEnv,
+    _class: JClass,
+    code: JString,
+) -> jstring {
+    let code = jstring_to_string(&mut env, &code);
+    match crate::cloud_sync::exchange_code(&code) {
+        Ok(json) => string_to_jstring(&mut env, &json).into_raw(),
+        Err(e) => {
+            log::error!("cloud_sync_exchange_code: {}", e);
+            string_to_jstring(&mut env, "").into_raw()
+        }
+    }
+}
+
+/// Save a token to the token store.
+/// `token_json` is the JSON returned by `nativeCloudSyncExchangeCode`.
+/// Returns true on success.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeCloudSyncSaveToken(
+    mut env: JNIEnv,
+    _class: JClass,
+    token_json: JString,
+) -> jboolean {
+    let json = jstring_to_string(&mut env, &token_json);
+    bool_to_jbool(crate::cloud_sync::save_token(&json).is_ok())
+}
+
+/// Check if a provider is authenticated.
+/// Returns JSON `{"authenticated":true,"expires_at":...}` or `{"authenticated":false}`.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeCloudSyncLoadToken(
+    mut env: JNIEnv,
+    _class: JClass,
+    provider: JString,
+) -> jstring {
+    let prov = jstring_to_string(&mut env, &provider);
+    match crate::cloud_sync::load_token(&prov) {
+        Ok(json) => string_to_jstring(&mut env, &json).into_raw(),
+        Err(_) => string_to_jstring(&mut env, r#"{"authenticated":false}"#).into_raw(),
+    }
+}
+
+/// Upload encrypted config to cloud.
+/// `params_json`: `{"provider":"dropbox","master_password":"xxx","force":false}`
+/// Returns JSON with `ok`/`conflict`/`reason` fields, or empty string on error.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeCloudSyncUpload(
+    mut env: JNIEnv,
+    _class: JClass,
+    params_json: JString,
+) -> jstring {
+    let params = jstring_to_string(&mut env, &params_json);
+    match crate::cloud_sync::upload(&params) {
+        Ok(json) => string_to_jstring(&mut env, &json).into_raw(),
+        Err(e) => {
+            log::error!("cloud_sync_upload: {}", e);
+            string_to_jstring(&mut env, &serde_json::json!({"ok":false,"reason":"error","message":e}).to_string()).into_raw()
+        }
+    }
+}
+
+/// Download and apply encrypted config from cloud.
+/// `params_json`: `{"provider":"dropbox","master_password":"xxx","force_download":false}`
+/// Returns JSON with `ok`/`reason`/`device_name`/`updated_at`/`size` fields.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeCloudSyncDownload(
+    mut env: JNIEnv,
+    _class: JClass,
+    params_json: JString,
+) -> jstring {
+    let params = jstring_to_string(&mut env, &params_json);
+    match crate::cloud_sync::download(&params) {
+        Ok(json) => string_to_jstring(&mut env, &json).into_raw(),
+        Err(e) => {
+            log::error!("cloud_sync_download: {}", e);
+            string_to_jstring(&mut env, &serde_json::json!({"ok":false,"reason":"error","message":e}).to_string()).into_raw()
+        }
+    }
+}
+
+/// Get cloud sync status for a provider.
+/// Returns JSON with `authenticated`/`has_remote`/`remote_size`/`last_synced` fields.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeCloudSyncStatus(
+    mut env: JNIEnv,
+    _class: JClass,
+    provider: JString,
+) -> jstring {
+    let prov = jstring_to_string(&mut env, &provider);
+    match crate::cloud_sync::status(&prov) {
+        Ok(json) => string_to_jstring(&mut env, &json).into_raw(),
+        Err(_) => string_to_jstring(&mut env, r#"{"authenticated":false,"has_remote":false}"#).into_raw(),
+    }
+}
+
+/// Disconnect a provider (remove its token).
+/// Returns true on success.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_com_termfast_app_RustBridge_nativeCloudSyncDisconnect(
+    mut env: JNIEnv,
+    _class: JClass,
+    provider: JString,
+) -> jboolean {
+    let prov = jstring_to_string(&mut env, &provider);
+    bool_to_jbool(crate::cloud_sync::disconnect(&prov).is_ok())
+}

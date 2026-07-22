@@ -96,6 +96,7 @@ pub async fn handle_request(request: &Request, state: &DaemonState) -> Response 
         Action::CloudSyncUpload => handle_cloud_sync_upload(state, &request.params).await,
         Action::CloudSyncDownload => handle_cloud_sync_download(state, &request.params).await,
         Action::CloudSyncGetFileInfo => handle_cloud_sync_file_info(state, &request.params).await,
+        Action::CloudSyncStatus => handle_cloud_sync_status(state, &request.params).await,
         Action::CloudSyncDeleteRemote => handle_cloud_sync_delete_remote(state, &request.params).await,
         Action::CloudSyncDisconnect => handle_cloud_sync_disconnect(state, &request.params).await,
         Action::CloudSyncRefreshToken => handle_cloud_sync_refresh_token(state, &request.params).await,
@@ -2957,6 +2958,232 @@ mod tests {
         let resp = handle_request(&req, &state).await;
         assert!(matches!(resp, Response::Err { .. }));
     }
+
+    // === 11.3 同步流程测试 ===
+
+    use termfast_cloud_sync::RemoteFileInfo;
+    use termfast_cloud_sync::sync_crypto::SyncPayload;
+
+    fn make_remote(exists: bool, hash: Option<&str>) -> RemoteFileInfo {
+        RemoteFileInfo {
+            exists,
+            size: if exists { Some(1024) } else { None },
+            hash: hash.map(String::from),
+            modified: if exists { Some("2026-07-21T10:00:00Z".into()) } else { None },
+        }
+    }
+
+    /// 11.3 用例 22: 远端不存在 → 安全上传（返回 None）
+    #[test]
+    fn test_conflict_remote_not_exists() {
+        let remote = make_remote(false, None);
+        let result = check_upload_conflict(&remote, None);
+        assert!(result.is_none(), "remote not exists → safe to upload");
+    }
+
+    /// 11.3 用例 23: hash 一致 → 安全上传
+    #[test]
+    fn test_conflict_hash_match() {
+        let remote = make_remote(true, Some("abc123"));
+        let result = check_upload_conflict(&remote, Some("abc123"));
+        assert!(result.is_none(), "hash match → safe to upload");
+    }
+
+    /// 11.3 用例 24: hash 不一致 → cloud_changed 冲突
+    #[test]
+    fn test_conflict_hash_mismatch() {
+        let remote = make_remote(true, Some("abc123"));
+        let result = check_upload_conflict(&remote, Some("different_hash"));
+        assert!(result.is_some());
+        let v = result.unwrap();
+        assert_eq!(v["conflict"], true);
+        assert_eq!(v["reason"], "cloud_changed");
+    }
+
+    /// 11.3 用例 25: 远端存在但本地无缓存 → cloud_exists_no_cache 冲突
+    #[test]
+    fn test_conflict_no_local_cache() {
+        let remote = make_remote(true, Some("abc123"));
+        let result = check_upload_conflict(&remote, None);
+        assert!(result.is_some());
+        let v = result.unwrap();
+        assert_eq!(v["conflict"], true);
+        assert_eq!(v["reason"], "cloud_exists_no_cache");
+    }
+
+    /// 11.3 用例 26: 远端存在但无 hash（provider 不支持）→ 安全上传
+    #[test]
+    fn test_conflict_no_remote_hash() {
+        let remote = make_remote(true, None);
+        let result = check_upload_conflict(&remote, Some("local_hash"));
+        assert!(result.is_none(), "no remote hash → can't detect, proceed");
+    }
+
+    /// 11.3 用例 27: force=true 时即使有冲突也跳过
+    /// 验证 check_upload_with_force(force=true, ...) 返回 None（跳过冲突检测）
+    #[test]
+    fn test_conflict_force_true_skips_conflict() {
+        let remote = make_remote(true, Some("abc"));
+        // force=true → 即使 hash 不一致也返回 None（跳过冲突检测）
+        let result = check_upload_with_force(true, &remote, Some("xyz"));
+        assert!(result.is_none(), "force=true must skip conflict detection");
+    }
+
+    /// 11.3 补充: force=false 时正常检测冲突
+    #[test]
+    fn test_conflict_force_false_detects_conflict() {
+        let remote = make_remote(true, Some("abc"));
+        // force=false → hash 不一致时返回冲突
+        let result = check_upload_with_force(false, &remote, Some("xyz"));
+        assert!(result.is_some());
+        let v = result.unwrap();
+        assert_eq!(v["reason"], "cloud_changed");
+    }
+
+    /// 11.3 补充: force=false 且无冲突时返回 None
+    #[test]
+    fn test_conflict_force_false_no_conflict() {
+        let remote = make_remote(true, Some("abc"));
+        let result = check_upload_with_force(false, &remote, Some("abc"));
+        assert!(result.is_none(), "force=false + hash match → no conflict");
+    }
+
+    /// 11.7 用例 32: 回滚检测 — 云端 updated_at 比本地旧 → 检测到回滚
+    #[test]
+    fn test_rollback_detected() {
+        let payload = SyncPayload {
+            config: serde_json::json!({}),
+            device_name: "attacker-device".into(),
+            updated_at: "2026-07-20T10:00:00Z".into(), // 比本地旧
+        };
+        let last = Some("2026-07-21T10:00:00Z");
+        let result = check_rollback(&payload, last);
+        assert!(result.is_some());
+        let v = result.unwrap();
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["reason"], "rollback_detected");
+        assert_eq!(v["cloud_updated_at"], "2026-07-20T10:00:00Z");
+        assert_eq!(v["last_updated_at"], "2026-07-21T10:00:00Z");
+        assert_eq!(v["device_name"], "attacker-device");
+    }
+
+    /// 11.7 用例 33: 回滚检测 — 云端 updated_at 比本地新 → 安全（无回滚）
+    #[test]
+    fn test_rollback_not_detected_newer() {
+        let payload = SyncPayload {
+            config: serde_json::json!({}),
+            device_name: "other-device".into(),
+            updated_at: "2026-07-22T10:00:00Z".into(), // 比本地新
+        };
+        let last = Some("2026-07-21T10:00:00Z");
+        let result = check_rollback(&payload, last);
+        assert!(result.is_none(), "newer cloud → no rollback");
+    }
+
+    /// 11.7 用例 34: 回滚检测 — 时间戳相等 → 安全（非严格小于）
+    #[test]
+    fn test_rollback_equal_timestamp_safe() {
+        let payload = SyncPayload {
+            config: serde_json::json!({}),
+            device_name: "same-device".into(),
+            updated_at: "2026-07-21T10:00:00Z".into(),
+        };
+        let last = Some("2026-07-21T10:00:00Z");
+        let result = check_rollback(&payload, last);
+        assert!(result.is_none(), "equal timestamp → not rollback");
+    }
+
+    /// 11.7 用例 35: 回滚检测 — 本地无 last_updated_at → 跳过检测（首次同步）
+    #[test]
+    fn test_rollback_no_local_history() {
+        let payload = SyncPayload {
+            config: serde_json::json!({}),
+            device_name: "any-device".into(),
+            updated_at: "2020-01-01T00:00:00Z".into(), // 很旧
+        };
+        let result = check_rollback(&payload, None);
+        assert!(result.is_none(), "no local history → skip rollback check");
+    }
+
+    /// 11.7 用例 36: 回滚检测 — force_download=true 时跳过回滚检测
+    /// 验证 check_rollback_with_force(force_download=true, ...) 返回 None
+    #[test]
+    fn test_rollback_force_download_true_skips_check() {
+        let payload = SyncPayload {
+            config: serde_json::json!({}),
+            device_name: "old-device".into(),
+            updated_at: "2020-01-01T00:00:00Z".into(), // 很旧
+        };
+        let last = Some("2026-07-21T10:00:00Z");
+        // force_download=true → 即使检测到回滚也返回 None（跳过）
+        let result = check_rollback_with_force(true, &payload, last);
+        assert!(result.is_none(), "force_download=true must skip rollback check");
+    }
+
+    /// 11.7 补充: force_download=false 时正常检测回滚
+    #[test]
+    fn test_rollback_force_download_false_detects() {
+        let payload = SyncPayload {
+            config: serde_json::json!({}),
+            device_name: "old-device".into(),
+            updated_at: "2020-01-01T00:00:00Z".into(),
+        };
+        let last = Some("2026-07-21T10:00:00Z");
+        let result = check_rollback_with_force(false, &payload, last);
+        assert!(result.is_some());
+        let v = result.unwrap();
+        assert_eq!(v["reason"], "rollback_detected");
+    }
+
+    /// 11.3 补充: 解密失败响应 — 调用 build_decrypt_failed_response 纯函数
+    #[test]
+    fn test_decrypt_failed_response() {
+        let resp = build_decrypt_failed_response();
+        assert_eq!(resp["ok"], false);
+        assert_eq!(resp["reason"], "decrypt_failed");
+        assert!(resp["message"].as_str().unwrap().contains("解密失败"));
+    }
+
+    /// 11.3 补充: 云端无更新响应 — 调用 build_no_update_response 纯函数
+    #[test]
+    fn test_no_update_response() {
+        let resp = build_no_update_response();
+        assert_eq!(resp["ok"], false);
+        assert_eq!(resp["reason"], "no_update");
+        assert!(resp["message"].as_str().unwrap().contains("无更新"));
+    }
+
+    /// 11.3 补充: 云端无数据响应 — 调用 build_no_remote_data_response 纯函数
+    #[test]
+    fn test_no_remote_data_response() {
+        let resp = build_no_remote_data_response();
+        assert_eq!(resp["ok"], false);
+        assert_eq!(resp["reason"], "no_remote_data");
+        assert!(resp["message"].as_str().unwrap().contains("没有同步数据"));
+    }
+
+    /// 11.3 补充: is_no_update — hash 一致时返回 true
+    #[test]
+    fn test_is_no_update_hash_match() {
+        let remote = make_remote(true, Some("abc123"));
+        assert!(is_no_update(&remote, Some("abc123")));
+    }
+
+    /// 11.3 补充: is_no_update — hash 不一致时返回 false
+    #[test]
+    fn test_is_no_update_hash_mismatch() {
+        let remote = make_remote(true, Some("abc123"));
+        assert!(!is_no_update(&remote, Some("different")));
+    }
+
+    /// 11.3 补充: is_no_update — 任一 hash 缺失时返回 false
+    #[test]
+    fn test_is_no_update_missing_hash() {
+        let remote_no_hash = make_remote(true, None);
+        assert!(!is_no_update(&remote_no_hash, Some("abc")));
+        let remote_with_hash = make_remote(true, Some("abc"));
+        assert!(!is_no_update(&remote_with_hash, None));
+    }
 }
 
 /// Helper: if request came from CLI, broadcast cli:focus to GUI
@@ -3034,6 +3261,13 @@ fn token_file_path(_state: &DaemonState) -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("cloud_tokens.json"))
 }
 
+/// Path to the encrypted sync state file.
+fn sync_state_path(_state: &DaemonState) -> std::path::PathBuf {
+    directories::BaseDirs::new()
+        .map(|d| d.config_dir().join("termfast").join("sync_state.enc"))
+        .unwrap_or_else(|| std::path::PathBuf::from("sync_state.enc"))
+}
+
 /// Get the sync file path on cloud storage.
 /// Reads custom path from params if provided, otherwise uses default.
 fn sync_path_from_params(params: &serde_json::Value) -> String {
@@ -3101,10 +3335,11 @@ async fn handle_cloud_sync_exchange_code(
     let redirect_uri = params["redirect_uri"]
         .as_str()
         .unwrap_or("http://localhost:17380/callback");
+    let state = params["state"].as_str().unwrap_or("");
 
     let p = build_provider(provider)?;
     let token = p
-        .exchange_code(code, code_verifier, redirect_uri)
+        .exchange_code(code, code_verifier, redirect_uri, state)
         .await
         .map_err(|e| IpcError::new(ErrorCode::Internal, format!("OAuth exchange: {}", e)))?;
 
@@ -3197,30 +3432,95 @@ async fn handle_cloud_sync_upload(
 ) -> HandlerResult {
     let provider = params["provider"]
         .as_str()
-        .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing provider"))?;
+        .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing provider"))?
+        .to_string();
     let master_password = params["master_password"]
         .as_str()
-        .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing master_password"))?;
+        .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing master_password"))?
+        .to_string();
+    // force=true skips conflict detection (used after user confirms overwrite)
+    let force = params["force"].as_bool().unwrap_or(false);
 
     // Load cloud token
     let path = token_file_path(state);
     let data = termfast_cloud_sync::token_store::load_tokens(&path)
         .map_err(|e| IpcError::new(ErrorCode::Internal, format!("load token: {}", e)))?;
-    let stored = data.tokens.get(provider).ok_or_else(|| {
+    let stored = data.tokens.get(provider.as_str()).ok_or_else(|| {
         IpcError::new(ErrorCode::CredentialNotFound, "not authenticated to cloud")
     })?;
 
-    // Export full config (encrypted with master password)
-    let export_blob = export_encrypted_config(state, master_password).await?;
+    let p = build_provider(&provider)?;
+    let sync_path = sync_path_from_params(params);
+
+    // Check remote file info for conflict detection
+    let remote_info = p
+        .file_info(&stored.token, &sync_path)
+        .await
+        .map_err(|e| IpcError::new(ErrorCode::Internal, format!("file_info: {}", e)))?;
+
+    // Load local sync state (encrypted) — on blocking thread
+    let state_path = sync_state_path(state);
+    let mp_for_state = master_password.clone();
+    let sync_state = tokio::task::spawn_blocking(move || {
+        termfast_cloud_sync::sync_state::load_state(&state_path, &mp_for_state)
+    })
+    .await
+    .map_err(|e| IpcError::new(ErrorCode::Internal, format!("spawn_blocking: {}", e)))?;
+
+    let local_hash = sync_state.last_hash(&provider);
+
+    // Conflict detection (unless force=true)
+    if let Some(conflict) = check_upload_with_force(force, &remote_info, local_hash) {
+        return Ok(conflict);
+    }
+
+    // Export config data
+    let export_data = export_full_data(state).await?;
+
+    // Build sync payload with metadata
+    let device_name = termfast_cloud_sync::sync_crypto::device_name();
+    let updated_at = chrono::Utc::now().to_rfc3339();
+    let payload = termfast_cloud_sync::sync_crypto::SyncPayload {
+        config: serde_json::to_value(&export_data)
+            .map_err(|e| IpcError::new(ErrorCode::Internal, format!("serialize config: {}", e)))?,
+        device_name: device_name.clone(),
+        updated_at: updated_at.clone(),
+    };
+
+    // Encrypt with master password — on blocking thread (Argon2id)
+    let mp = master_password.clone();
+    let blob = tokio::task::spawn_blocking(move || {
+        termfast_cloud_sync::sync_crypto::encrypt_config(&mp, &payload)
+    })
+    .await
+    .map_err(|e| IpcError::new(ErrorCode::Internal, format!("spawn_blocking: {}", e)))?
+    .map_err(|e| IpcError::new(ErrorCode::Internal, format!("encrypt: {}", e)))?;
 
     // Upload to cloud
-    let p = build_provider(provider)?;
-    let sync_path = sync_path_from_params(params);
-    p.upload(&stored.token, &sync_path, &export_blob)
+    p.upload(&stored.token, &sync_path, &blob)
         .await
         .map_err(|e| IpcError::new(ErrorCode::Internal, format!("upload: {}", e)))?;
 
-    Ok(serde_json::json!({ "ok": true, "size": export_blob.len() }))
+    // Get the new remote hash (re-fetch file_info)
+    let new_info = p
+        .file_info(&stored.token, &sync_path)
+        .await
+        .map_err(|e| IpcError::new(ErrorCode::Internal, format!("file_info after upload: {}", e)))?;
+
+    let new_hash = new_info.hash.unwrap_or_default();
+
+    // Update sync state — on blocking thread
+    let state_path = sync_state_path(state);
+    let mp = master_password.clone();
+    let prov = provider.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        let mut st = termfast_cloud_sync::sync_state::load_state(&state_path, &mp);
+        st.set_sync_info(&prov, new_hash, device_name, updated_at);
+        termfast_cloud_sync::sync_state::save_state(&state_path, &mp, &st)
+    })
+    .await;
+
+    Ok(serde_json::json!({ "ok": true, "size": blob.len() }))
 }
 
 async fn handle_cloud_sync_download(
@@ -3229,28 +3529,110 @@ async fn handle_cloud_sync_download(
 ) -> HandlerResult {
     let provider = params["provider"]
         .as_str()
-        .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing provider"))?;
+        .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing provider"))?
+        .to_string();
+    let master_password = params["master_password"]
+        .as_str()
+        .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing master_password"))?
+        .to_string();
+    // force_download=true skips rollback warning (user confirmed)
+    let force_download = params["force_download"].as_bool().unwrap_or(false);
 
     // Load cloud token
     let path = token_file_path(state);
     let data = termfast_cloud_sync::token_store::load_tokens(&path)
         .map_err(|e| IpcError::new(ErrorCode::Internal, format!("load token: {}", e)))?;
-    let stored = data.tokens.get(provider).ok_or_else(|| {
+    let stored = data.tokens.get(provider.as_str()).ok_or_else(|| {
         IpcError::new(ErrorCode::CredentialNotFound, "not authenticated to cloud")
     })?;
 
-    // Download from cloud
-    let p = build_provider(provider)?;
+    let p = build_provider(&provider)?;
     let sync_path = sync_path_from_params(params);
+
+    // Check remote file info
+    let remote_info = p
+        .file_info(&stored.token, &sync_path)
+        .await
+        .map_err(|e| IpcError::new(ErrorCode::Internal, format!("file_info: {}", e)))?;
+
+    if !remote_info.exists {
+        return Ok(build_no_remote_data_response());
+    }
+
+    // Load local sync state for hash comparison + rollback detection
+    let state_path = sync_state_path(state);
+    let mp_for_state = master_password.clone();
+    let sync_state = tokio::task::spawn_blocking(move || {
+        termfast_cloud_sync::sync_state::load_state(&state_path, &mp_for_state)
+    })
+    .await
+    .map_err(|e| IpcError::new(ErrorCode::Internal, format!("spawn_blocking: {}", e)))?;
+
+    let local_hash = sync_state.last_hash(&provider);
+
+    // If hash matches, no update needed
+    if is_no_update(&remote_info, local_hash) {
+        return Ok(build_no_update_response());
+    }
+
+    // Download from cloud
     let blob = p
         .download(&stored.token, &sync_path)
         .await
         .map_err(|e| IpcError::new(ErrorCode::Internal, format!("download: {}", e)))?;
+    let blob_size = blob.len();
 
-    // Return as base64 — the caller will import it with master_password
-    use base64::Engine;
-    let blob_b64 = base64::engine::general_purpose::STANDARD.encode(&blob);
-    Ok(serde_json::json!({ "blob": blob_b64, "size": blob.len() }))
+    // Decrypt — on blocking thread (Argon2id)
+    let mp = master_password.clone();
+    let decrypt_result = tokio::task::spawn_blocking(move || {
+        termfast_cloud_sync::sync_crypto::decrypt_config(&mp, &blob)
+    })
+    .await
+    .map_err(|e| IpcError::new(ErrorCode::Internal, format!("spawn_blocking: {}", e)))?;
+
+    let payload = match decrypt_result {
+        Ok(p) => p,
+        Err(_) => {
+            // Decryption failed — password mismatch or corrupted data
+            // Return a flag so the frontend can prompt for the cloud password
+            return Ok(build_decrypt_failed_response());
+        }
+    };
+
+    // Rollback detection: compare updated_at with last_updated_at
+    {
+        let last_updated = sync_state.get(&provider).last_updated_at.as_deref().map(String::from);
+        if let Some(rollback) = check_rollback_with_force(force_download, &payload, last_updated.as_deref()) {
+            return Ok(rollback);
+        }
+    }
+
+    // Apply the downloaded config
+    let export_data: termfast_core::migration::FullExportData =
+        serde_json::from_value(payload.config.clone())
+            .map_err(|e| IpcError::new(ErrorCode::Internal, format!("parse config: {}", e)))?;
+    apply_full_export(state, &export_data).await?;
+
+    // Update sync state
+    let new_hash = remote_info.hash.unwrap_or_default();
+    let device_name = payload.device_name.clone();
+    let updated_at = payload.updated_at.clone();
+    let state_path = sync_state_path(state);
+    let mp = master_password.clone();
+    let prov = provider.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        let mut st = termfast_cloud_sync::sync_state::load_state(&state_path, &mp);
+        st.set_sync_info(&prov, new_hash, device_name, updated_at);
+        termfast_cloud_sync::sync_state::save_state(&state_path, &mp, &st)
+    })
+    .await;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "device_name": payload.device_name,
+        "updated_at": payload.updated_at,
+        "size": blob_size,
+    }))
 }
 
 async fn handle_cloud_sync_file_info(
@@ -3279,6 +3661,34 @@ async fn handle_cloud_sync_file_info(
         "exists": info.exists,
         "size": info.size,
         "modified": info.modified,
+    }))
+}
+
+/// Get sync status (last sync time + device name) from local sync_state.enc.
+async fn handle_cloud_sync_status(
+    state: &DaemonState,
+    params: &serde_json::Value,
+) -> HandlerResult {
+    let provider = params["provider"]
+        .as_str()
+        .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing provider"))?
+        .to_string();
+    let master_password = params["master_password"]
+        .as_str()
+        .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "missing master_password"))?
+        .to_string();
+
+    let state_path = sync_state_path(state);
+    let sync_state = tokio::task::spawn_blocking(move || {
+        termfast_cloud_sync::sync_state::load_state(&state_path, &master_password)
+    })
+    .await
+    .map_err(|e| IpcError::new(ErrorCode::Internal, format!("spawn_blocking: {}", e)))?;
+
+    let info = sync_state.last_sync_info(&provider);
+    Ok(serde_json::json!({
+        "device_name": info.device_name,
+        "updated_at": info.updated_at,
     }))
 }
 
@@ -3368,11 +3778,138 @@ async fn handle_cloud_sync_refresh_token(
     }))
 }
 
-/// Export the full config as an encrypted blob (reuses ExportFull logic).
-async fn export_encrypted_config(
-    state: &DaemonState,
-    master_password: &str,
-) -> Result<Vec<u8>, IpcError> {
+/// Check for upload conflict based on remote file info and local cached hash.
+/// Returns Some(conflict_json) if a conflict is detected, None if safe to upload.
+///
+/// 4 branches (design doc 6.1):
+/// - remote doesn't exist → None (safe, first upload)
+/// - remote exists, hash matches local cache → None (safe, cloud unchanged)
+/// - remote exists, hash differs from local cache → conflict (cloud_changed)
+/// - remote exists, no local cache → conflict (cloud_exists_no_cache)
+/// - remote exists but no hash from provider → None (can't detect, proceed)
+pub fn check_upload_conflict(
+    remote_info: &termfast_cloud_sync::RemoteFileInfo,
+    local_hash: Option<&str>,
+) -> Option<serde_json::Value> {
+    if !remote_info.exists {
+        return None;
+    }
+    let remote_hash = remote_info.hash.as_deref();
+    match (remote_hash, local_hash) {
+        (Some(rh), Some(lh)) if rh == lh => None, // safe
+        (Some(_), Some(_)) => Some(serde_json::json!({
+            "conflict": true,
+            "reason": "cloud_changed",
+            "message": "网盘文件被其他客户端改过，强行覆盖会丢失对方改动。",
+        })),
+        (Some(_), None) => Some(serde_json::json!({
+            "conflict": true,
+            "reason": "cloud_exists_no_cache",
+            "message": "网盘已有数据文件，是否强行覆盖云端？",
+        })),
+        (None, _) => None, // no hash from provider, can't detect
+    }
+}
+
+/// Decide whether to proceed with upload despite a potential conflict.
+/// When force=true, always proceeds (returns None). When force=false,
+/// delegates to check_upload_conflict.
+/// This encapsulates the `if !force { check_upload_conflict(...) }` logic
+/// so it can be unit-tested.
+pub fn check_upload_with_force(
+    force: bool,
+    remote_info: &termfast_cloud_sync::RemoteFileInfo,
+    local_hash: Option<&str>,
+) -> Option<serde_json::Value> {
+    if force {
+        None
+    } else {
+        check_upload_conflict(remote_info, local_hash)
+    }
+}
+
+/// Check for rollback attack by comparing cloud updated_at with local last_updated_at.
+/// Returns Some(rollback_json) if rollback detected, None if safe.
+///
+/// Design doc 6.2.1: if cloud updated_at < local last_updated_at, the cloud file
+/// is older than what we last synced — likely a rollback attack.
+pub fn check_rollback(
+    payload: &termfast_cloud_sync::sync_crypto::SyncPayload,
+    last_updated_at: Option<&str>,
+) -> Option<serde_json::Value> {
+    let last = last_updated_at?;
+    if payload.updated_at.as_str() < last {
+        Some(serde_json::json!({
+            "ok": false,
+            "reason": "rollback_detected",
+            "message": "云端文件时间戳比上次同步更旧，可能是回滚攻击",
+            "cloud_updated_at": payload.updated_at,
+            "last_updated_at": last,
+            "device_name": payload.device_name,
+            "config": payload.config,
+        }))
+    } else {
+        None
+    }
+}
+
+/// Decide whether to proceed with download despite a potential rollback.
+/// When force_download=true, always proceeds (returns None). When force_download=false,
+/// delegates to check_rollback.
+/// This encapsulates the `if !force_download { check_rollback(...) }` logic
+/// so it can be unit-tested.
+pub fn check_rollback_with_force(
+    force_download: bool,
+    payload: &termfast_cloud_sync::sync_crypto::SyncPayload,
+    last_updated_at: Option<&str>,
+) -> Option<serde_json::Value> {
+    if force_download {
+        None
+    } else {
+        check_rollback(payload, last_updated_at)
+    }
+}
+
+/// Build the "no remote data" response (download handler, remote file doesn't exist).
+pub fn build_no_remote_data_response() -> serde_json::Value {
+    serde_json::json!({
+        "ok": false,
+        "reason": "no_remote_data",
+        "message": "云端没有同步数据",
+    })
+}
+
+/// Build the "no update needed" response (download handler, hash matches).
+pub fn build_no_update_response() -> serde_json::Value {
+    serde_json::json!({
+        "ok": false,
+        "reason": "no_update",
+        "message": "云端无更新",
+    })
+}
+
+/// Build the "decrypt failed" response (download handler, wrong password or corruption).
+pub fn build_decrypt_failed_response() -> serde_json::Value {
+    serde_json::json!({
+        "ok": false,
+        "reason": "decrypt_failed",
+        "message": "解密失败，主密码与云端不一致或数据损坏",
+    })
+}
+
+/// Check if download should return "no update" because remote hash matches local cache.
+/// Returns true if hashes match (no update needed), false otherwise.
+pub fn is_no_update(
+    remote_info: &termfast_cloud_sync::RemoteFileInfo,
+    local_hash: Option<&str>,
+) -> bool {
+    match (&remote_info.hash, local_hash) {
+        (Some(rh), Some(lh)) => rh == lh,
+        _ => false,
+    }
+}
+
+async fn export_full_data(state: &DaemonState) -> Result<termfast_core::migration::FullExportData, IpcError> {
     let mgr = state.config_manager.lock().await;
     let config = mgr.get().await;
 
@@ -3402,12 +3939,98 @@ async fn export_encrypted_config(
         }
     }
 
-    let export_data = termfast_core::migration::FullExportData {
+    Ok(termfast_core::migration::FullExportData {
         config: config.clone(),
         passwords,
         key_passphrases,
         key_files,
-    };
+    })
+}
+
+/// Apply a FullExportData to the local config + credentials.
+/// Extracted from handle_import_full for reuse by cloud sync download.
+async fn apply_full_export(
+    state: &DaemonState,
+    export_data: &termfast_core::migration::FullExportData,
+) -> Result<(), IpcError> {
+    // Apply config
+    {
+        let mgr = state.config_manager.lock().await;
+        mgr.modify(|config| {
+            *config = export_data.config.clone();
+        })
+        .await
+        .map_err(|e| IpcError::new(ErrorCode::Internal, e.to_string()))?;
+    }
+
+    // Restore credentials
+    for (server_id, pwd) in &export_data.passwords {
+        let key =
+            termfast_credential::make_key(server_id, termfast_credential::cred_type::PASSWORD);
+        let _ = state.credential_store.save(&key, pwd);
+    }
+    for (server_id, pass) in &export_data.key_passphrases {
+        let key = termfast_credential::make_key(
+            server_id,
+            termfast_credential::cred_type::KEY_PASSPHRASE,
+        );
+        let _ = state.credential_store.save(&key, pass);
+    }
+    // Restore key files — validate key_path to prevent path traversal
+    {
+        let mgr = state.config_manager.lock().await;
+        let config = mgr.get().await;
+        for (server_id, content) in &export_data.key_files {
+            if let Some(server) = config.servers.iter().find(|s| s.id == *server_id) {
+                if server.ssh.key_path.is_empty() {
+                    continue;
+                }
+                let key_path = std::path::Path::new(&server.ssh.key_path);
+                let canonical = match key_path.canonicalize() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        match key_path.parent().and_then(|p| p.canonicalize().ok()) {
+                            Some(parent) => parent.join(key_path.file_name().unwrap_or_default()),
+                            None => continue,
+                        }
+                    }
+                };
+                let home = directories::BaseDirs::new()
+                    .map(|d| d.home_dir().to_path_buf())
+                    .unwrap_or_default();
+                let ssh_dir = home.join(".ssh");
+                let is_safe = canonical.starts_with(&ssh_dir)
+                    || canonical.starts_with(std::env::temp_dir().join("termfast"));
+                if !is_safe {
+                    tracing::warn!("apply_full_export: refusing to write key to {}", canonical.display());
+                    continue;
+                }
+                if let Err(e) = std::fs::write(&canonical, content) {
+                    tracing::warn!("apply_full_export: failed to write key file {}: {}", canonical.display(), e);
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&canonical, std::fs::Permissions::from_mode(0o600));
+                }
+            }
+        }
+    }
+
+    // Broadcast config changed
+    state
+        .broadcast("config:changed", serde_json::json!({}))
+        .await;
+
+    Ok(())
+}
+
+#[allow(dead_code)]
+async fn export_encrypted_config(
+    state: &DaemonState,
+    master_password: &str,
+) -> Result<Vec<u8>, IpcError> {
+    let export_data = export_full_data(state).await?;
 
     let blob = tokio::task::spawn_blocking({
         let mp = master_password.to_string();
@@ -3503,11 +4126,15 @@ async fn handle_cloud_sync_wait_callback(
         .ok_or_else(|| IpcError::new(ErrorCode::InvalidParams, "no pending auth"))?;
 
     // Wait for callback (5 min timeout)
+    tracing::info!("cloud_sync: waiting for OAuth callback...");
     let result = match tokio::time::timeout(
         std::time::Duration::from_secs(300),
         rx,
     ).await {
-        Ok(Ok(r)) => r,
+        Ok(Ok(r)) => {
+            tracing::info!("cloud_sync: callback received, code={}, state={}", r.code, r.state);
+            r
+        }
         Ok(Err(_)) => return Err(IpcError::new(ErrorCode::Internal, "callback channel closed")),
         Err(_) => return Err(IpcError::new(ErrorCode::Internal, "callback timed out (5 min)")),
     };
@@ -3515,6 +4142,8 @@ async fn handle_cloud_sync_wait_callback(
     if result.code.is_empty() {
         return Err(IpcError::new(ErrorCode::Internal, "no code in callback"));
     }
+
+    tracing::info!("cloud_sync: exchanging code for token, provider={}", pending.provider);
 
     // Verify state for Baidu (CSRF protection)
     if pending.provider == "baidu" && !pending.state.is_empty() && result.state != pending.state {
@@ -3524,7 +4153,7 @@ async fn handle_cloud_sync_wait_callback(
     // Exchange code for token
     let p = build_provider(&pending.provider)?;
     let token = p
-        .exchange_code(&result.code, &pending.code_verifier, &pending.redirect_uri)
+        .exchange_code(&result.code, &pending.code_verifier, &pending.redirect_uri, &result.state)
         .await
         .map_err(|e| IpcError::new(ErrorCode::Internal, format!("OAuth exchange: {}", e)))?;
 

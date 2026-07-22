@@ -41,6 +41,12 @@ $DROPBOX_APP_SECRET = $get_cfg('DROPBOX_APP_SECRET');
 $BAIDU_APP_KEY      = $get_cfg('BAIDU_APP_KEY');
 $BAIDU_APP_SECRET   = $get_cfg('BAIDU_APP_SECRET');
 
+// Mobile OAuth callback URL — this script receives the OAuth code from the
+// provider, then redirects the browser to termfast://oauth/callback?code=...
+// The Android app catches this deep link and passes the code to the FFI layer.
+// Must be registered in Dropbox/Baidu developer console.
+$MOBILE_CALLBACK_URL = 'https://termfast.xisj.com/tools/cloud-sync-callback.php';
+
 // === 安全响应头 (L-2) ===
 header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: DENY');
@@ -116,7 +122,7 @@ try {
  * 服务器只负责拼 URL（因为 app_key 在服务器上）。
  */
 function handleAuthUrl() {
-    global $DROPBOX_APP_KEY, $BAIDU_APP_KEY;
+    global $DROPBOX_APP_KEY, $BAIDU_APP_KEY, $MOBILE_CALLBACK_URL;
 
     $provider = $_GET['provider'] ?? '';
     $redirect_uri = $_GET['redirect_uri'] ?? 'oob';
@@ -128,8 +134,11 @@ function handleAuthUrl() {
         return;
     }
 
-    // Whitelist redirect_uri — only allow oob and localhost callbacks
-    if ($redirect_uri !== 'oob' && !preg_match('/^https?:\/\/localhost(:\d+)?\//', $redirect_uri)) {
+    // Whitelist redirect_uri — allow oob, localhost callbacks, and the
+    // mobile relay callback (cloud-sync-callback.php redirects to termfast://)
+    if ($redirect_uri !== 'oob'
+        && $redirect_uri !== $MOBILE_CALLBACK_URL
+        && !preg_match('/^https?:\/\/localhost(:\d+)?\//', $redirect_uri)) {
         http_response_code(400);
         echo json_encode(['error' => 'invalid redirect_uri']);
         return;
@@ -188,7 +197,7 @@ function handleAuthUrl() {
  * 百度 Authorization Code flow 返回 access_token + refresh_token（10年有效）。
  */
 function handleExchange() {
-    global $DROPBOX_APP_KEY, $DROPBOX_APP_SECRET, $BAIDU_APP_KEY, $BAIDU_APP_SECRET;
+    global $DROPBOX_APP_KEY, $DROPBOX_APP_SECRET, $BAIDU_APP_KEY, $BAIDU_APP_SECRET, $MOBILE_CALLBACK_URL;
     
     $body = json_decode(file_get_contents('php://input'), true);
     if (!$body) {
@@ -210,7 +219,9 @@ function handleExchange() {
     }
 
     // Validate redirect_uri (H-2: was missing — only auth_url endpoint checked)
-    if ($redirect_uri !== 'oob' && !preg_match('/^https?:\/\/localhost(:\d+)?\//', $redirect_uri)) {
+    if ($redirect_uri !== 'oob'
+        && $redirect_uri !== $MOBILE_CALLBACK_URL
+        && !preg_match('/^https?:\/\/localhost(:\d+)?\//', $redirect_uri)) {
         http_response_code(400);
         echo json_encode(['error' => 'invalid redirect_uri']);
         return;

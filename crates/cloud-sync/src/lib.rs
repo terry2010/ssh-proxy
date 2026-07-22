@@ -10,6 +10,8 @@
 pub mod baidu;
 pub mod callback;
 pub mod dropbox;
+pub mod sync_crypto;
+pub mod sync_state;
 pub mod token_store;
 
 use serde::{Deserialize, Serialize};
@@ -122,12 +124,14 @@ pub trait CloudProviderTrait: Send + Sync {
     }
 
     /// Exchange an authorization code for an OAuth token (PKCE flow).
+    /// `state` is the OAuth state from the callback (for CSRF verification by proxy).
     /// Returns error for implicit-only providers.
     async fn exchange_code(
         &self,
         code: &str,
         code_verifier: &str,
         redirect_uri: &str,
+        state: &str,
     ) -> Result<OAuthToken, CloudSyncError>;
 
     /// Refresh an expired access token using a refresh token.
