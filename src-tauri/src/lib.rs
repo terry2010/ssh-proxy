@@ -1333,8 +1333,13 @@ async fn ipc_cloud_sync_download(
     // If credential store is initialized (not pending), verify the password
     // can unlock it before proceeding with download. If not, tell the user
     // to change their local master password first.
-    if !cred_state.store.is_pending() && cred_state.store.is_initialized() {
-        if let Err(_) = cred_state.store.unlock(&master_password) {
+    let is_pending = cred_state.store.is_pending();
+    let is_init = cred_state.store.is_initialized();
+    tracing::info!("download pre-check: is_pending={}, is_initialized={}", is_pending, is_init);
+    if !is_pending && is_init {
+        let unlock_result = cred_state.store.unlock(&master_password);
+        tracing::info!("download pre-check: unlock result = {:?}", unlock_result.as_ref().map(|_| ()).map_err(|e| e.to_string()));
+        if let Err(_) = unlock_result {
             return Ok(serde_json::json!({
                 "ok": false,
                 "reason": "wrong_password",
