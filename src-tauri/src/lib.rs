@@ -1335,21 +1335,28 @@ async fn ipc_cloud_sync_download(
         .ok_or_else(|| "master password not available — unlock credential store first".to_string())?;
     // Verify the password can unlock the local credential store.
     // If the encrypted file exists, the password must match it.
-    // If the file doesn't exist (fresh install / pending), skip verification.
+    // If the file doesn't exist (no master password set), require the
+    // user to set a master password first — downloading without a local
+    // master password means the synced credentials can't be protected.
     let cred_path = credential_manager::credential_file_path();
     let cred_file_exists = cred_path.exists();
     tracing::info!("download pre-check: cred_file={}, path={}", cred_file_exists, cred_path.display());
-    if cred_file_exists {
-        match cred_state.store.unlock(&master_password) {
-            Ok(_) => tracing::info!("download pre-check: unlock OK"),
-            Err(e) => {
-                tracing::warn!("download pre-check: unlock failed: {:?}", e);
-                return Ok(serde_json::json!({
-                    "ok": false,
-                    "reason": "wrong_password",
-                    "message": "输入的主密码与本地主密码不一致，请先修改主密码后再下载",
-                }));
-            }
+    if !cred_file_exists {
+        return Ok(serde_json::json!({
+            "ok": false,
+            "reason": "not_initialized",
+            "message": "请先设置主密码后再从云端下载",
+        }));
+    }
+    match cred_state.store.unlock(&master_password) {
+        Ok(_) => tracing::info!("download pre-check: unlock OK"),
+        Err(e) => {
+            tracing::warn!("download pre-check: unlock failed: {:?}", e);
+            return Ok(serde_json::json!({
+                "ok": false,
+                "reason": "wrong_password",
+                "message": "输入的主密码与本地主密码不一致，请先修改主密码后再下载",
+            }));
         }
     }
     let mut params = serde_json::json!({

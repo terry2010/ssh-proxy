@@ -1244,6 +1244,12 @@ function CloudSyncSection() {
           throw e;
         }
       }
+      // Handle not initialized — no master password set
+      if (res.ok === false && res.reason === "not_initialized") {
+        toast.error(res.message || "请先设置主密码后再从云端下载");
+        setBusy(false);
+        return;
+      }
       // Handle wrong password — prompt user to change password first
       if (res.ok === false && res.reason === "wrong_password") {
         const { ask } = await import("@tauri-apps/plugin-dialog");

@@ -252,6 +252,11 @@ fun CloudSyncSection() {
                             msg = "下载成功：来自 ${resp.device_name ?: "未知设备"}，${resp.size ?: 0} 字节"
                             showDownloadDialog = null
                         }
+                        resp.reason == "not_initialized" -> {
+                            msg = resp.message ?: "请先设置主密码后再从云端下载"
+                            showDownloadDialog = null
+                            Toast.makeText(context, resp.message ?: "请先设置主密码后再从云端下载", Toast.LENGTH_LONG).show()
+                        }
                         resp.reason == "wrong_password" -> {
                             msg = resp.message ?: "输入的主密码与本地主密码不一致"
                             showDownloadDialog = null

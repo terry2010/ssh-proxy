@@ -541,18 +541,25 @@ pub fn download(params_json: &str) -> Result<String, String> {
         .to_string();
     let force_download = params["force_download"].as_bool().unwrap_or(false);
 
-    // If credential store is initialized (not pending), verify the password
-    // can unlock it before proceeding with download. If not, tell the user
-    // to change their local master password first.
+    // Verify the password can unlock the local credential store.
+    // If the encrypted file exists, the password must match it.
+    // If the file doesn't exist (no master password set), require the
+    // user to set a master password first.
     let store = crate::credential::android_credential_store();
-    if !store.is_pending() && store.is_initialized() {
-        if let Err(_) = store.unlock(&master_password) {
-            return Ok(serde_json::json!({
-                "ok": false,
-                "reason": "wrong_password",
-                "message": "输入的主密码与本地主密码不一致，请先修改主密码后再下载",
-            }).to_string());
-        }
+    let cred_path = data_dir().join("credentials.enc");
+    if !cred_path.exists() {
+        return Ok(serde_json::json!({
+            "ok": false,
+            "reason": "not_initialized",
+            "message": "请先设置主密码后再从云端下载",
+        }).to_string());
+    }
+    if let Err(_) = store.unlock(&master_password) {
+        return Ok(serde_json::json!({
+            "ok": false,
+            "reason": "wrong_password",
+            "message": "输入的主密码与本地主密码不一致，请先修改主密码后再下载",
+        }).to_string());
     }
 
     // Load token
