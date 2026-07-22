@@ -1437,14 +1437,14 @@ function CloudSyncSection() {
 
           <div className="flex gap-2">
             <button
-              onClick={() => upload()}
+              onClick={() => { setPendingAction("upload"); setPwPromptText(""); setShowPwPrompt(true); }}
               disabled={busy}
               className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 disabled:opacity-50"
             >
               {busy ? t("common.loading") : t("settings.cloud_sync.upload")}
             </button>
             <button
-              onClick={() => download()}
+              onClick={() => { setPendingAction("download"); setPwPromptText(""); setShowPwPrompt(true); }}
               disabled={busy}
               className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 disabled:opacity-50"
             >
