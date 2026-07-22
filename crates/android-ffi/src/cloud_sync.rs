@@ -541,19 +541,6 @@ pub fn download(params_json: &str) -> Result<String, String> {
         .to_string();
     let force_download = params["force_download"].as_bool().unwrap_or(false);
 
-    // If credential store is initialized (not pending), verify the password
-    // can unlock it before proceeding with download.
-    let store = crate::credential::android_credential_store();
-    if !store.is_pending() && store.is_initialized() {
-        if let Err(_) = store.unlock(&master_password) {
-            return Ok(serde_json::json!({
-                "ok": false,
-                "reason": "wrong_password",
-                "message": "输入的主密码与本地主密码不一致，请先修改主密码后再下载",
-            }).to_string());
-        }
-    }
-
     // Load token
     let path = token_file_path();
     let data = token_store::load_tokens(&path).map_err(|e| format!("load token: {}", e))?;
@@ -677,29 +664,24 @@ pub fn download(params_json: &str) -> Result<String, String> {
     let export_data: FullExportData = serde_json::from_value(payload.config.clone())
         .map_err(|e| format!("parse config: {}", e))?;
 
-    // Before applying, ensure the credential store is unlocked with the
-    // download password. This handles two cases:
-    // 1. Store in pending mode (no credentials.enc) → initialize with
-    //    download password, so apply_full_export's save() calls write
-    //    to encrypted credentials.enc instead of plaintext JSON.
-    // 2. Store locked (credentials.enc exists but not unlocked) → unlock
-    //    with download password, so save() calls succeed and persist.
-    //    (If download password ≠ old local password, unlock fails — but
-    //    apply_full_export saves to in-memory store which is lost on
-    //    restart. User would need to re-enter passwords. This is
-    //    acceptable because mismatched passwords are an edge case.)
+    // Before applying, verify the download password matches the local
+    // master password (if local store is initialized). If they differ,
+    // stop — applying would overwrite local data with credentials
+    // encrypted under a different password, making them unusable.
     {
         let store = crate::credential::android_credential_store();
-        if store.is_pending() {
-            let _ = store.initialize(&master_password);
-        } else if !store.is_unlocked() {
-            // Try to unlock with download password. If it fails (wrong
-            // password), reset to pending and re-initialize with the
-            // download password so credentials persist encrypted.
-            if store.unlock(&master_password).is_err() {
-                let _ = store.reset();
-                let _ = store.initialize(&master_password);
+        if !store.is_pending() && store.is_initialized() {
+            if let Err(_) = store.unlock(&master_password) {
+                return Ok(serde_json::json!({
+                    "ok": false,
+                    "reason": "password_mismatch_local",
+                    "message": "云端数据已解密，但云端主密码与本地主密码不一致。\n请将本地主密码修改为云端主密码后重新下载，才能正常使用同步的凭据。",
+                }).to_string());
             }
+        } else if store.is_pending() {
+            // No local password set — initialize with download password
+            // so credentials persist encrypted.
+            let _ = store.initialize(&master_password);
         }
     }
 
