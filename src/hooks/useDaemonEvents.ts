@@ -236,6 +236,13 @@ export function useDaemonEvents() {
       reloadServers();
     });
 
+    // config:changed — config was modified (e.g. cloud sync download applied
+    // new config via apply_full_export). Reload server list to reflect changes.
+    addListener<{}>("config:changed", () => {
+      console.log("[useDaemonEvents] config:changed received, reloading servers");
+      reloadServers();
+    });
+
     // cli:focus — CLI operations focus a server and/or tab in the GUI
     addListener<{ server_id: string; tab?: string }>("cli:focus", (data) => {
       useServerStore.getState().selectServer(data.server_id);
