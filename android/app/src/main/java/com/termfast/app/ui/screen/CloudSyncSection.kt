@@ -2,6 +2,7 @@ package com.termfast.app.ui.screen
 
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -249,6 +250,7 @@ fun CloudSyncSection() {
                         resp.reason == "decrypt_failed" -> {
                             msg = "解密失败，主密码与云端不一致"
                             showDownloadDialog = null
+                            Toast.makeText(context, "解密失败，主密码与云端不一致", Toast.LENGTH_LONG).show()
                         }
                         resp.reason == "no_update" -> {
                             // Close password dialog, show overwrite confirmation
@@ -260,6 +262,7 @@ fun CloudSyncSection() {
                                 "cached_password" to pw,
                                 "scenario" to "no_update",
                             ))
+                            Toast.makeText(context, "云端无更新，是否覆盖本地？", Toast.LENGTH_SHORT).show()
                         }
                         resp.reason == "local_newer" -> {
                             // Local data is newer than cloud — downloading would
@@ -271,14 +274,17 @@ fun CloudSyncSection() {
                                 "cached_password" to pw,
                                 "scenario" to "local_newer",
                             ))
+                            Toast.makeText(context, "本地数据比云端新，是否覆盖？", Toast.LENGTH_SHORT).show()
                         }
                         resp.reason == "no_remote_data" -> {
                             msg = "云端没有同步数据"
                             showDownloadDialog = null
+                            Toast.makeText(context, "云端没有同步数据", Toast.LENGTH_SHORT).show()
                         }
                         else -> {
                             msg = "下载失败：${resp.message ?: resp.reason ?: "未知错误"}"
                             showDownloadDialog = null
+                            Toast.makeText(context, "下载失败：${resp.message ?: resp.reason ?: "未知错误"}", Toast.LENGTH_LONG).show()
                         }
                     }
                 }
