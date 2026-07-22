@@ -248,19 +248,41 @@ impl EncryptedFileCredentialStore {
 
     /// Import an encrypted file from a source path.
     /// Verifies the master password can decrypt the file before overwriting.
-    /// On success, unlocks with the imported credentials.
+    /// Supports both v1 and v2 formats. On success, unlocks with imported credentials.
     pub fn import_from(&self, src: &std::path::Path, master_password: &str) -> Result<()> {
-        // Read and validate the import file format.
         let data = std::fs::read(src).context("failed to read import file")?;
-        let header = super::encrypted::read_header_pub(&data)
-            .context("import file is not a valid encrypted credential file")?;
+        if data.len() < 5 || &data[..4] != b"TCRE" {
+            anyhow::bail!("import file is not a valid encrypted credential file");
+        }
+        let version = data[4];
         // Verify password can decrypt before overwriting local file.
-        let key = super::encrypted::derive_key_pub(master_password, &header.salt)?;
-        let _plaintext = super::encrypted::decrypt_with_key_pub(&key, &header, &data[super::encrypted::HEADER_LEN..])
-            .context("wrong master password or corrupted import file")?;
-        // Password verified — safe to overwrite.
-        super::encrypted::write_atomic_pub(self.store.path(), &data)?;
-        self.store.set_sync_version(header.sync_version);
+        match version {
+            1 => {
+                // v1: use legacy verification
+                let header = super::encrypted::read_header_pub(&data)
+                    .context("import file has invalid v1 header")?;
+                let key = super::encrypted::derive_key_pub(master_password, &header.salt)?;
+                let _plaintext = super::encrypted::decrypt_with_key_pub(&key, &header, &data[super::encrypted::HEADER_LEN..])
+                    .context("wrong master password or corrupted import file")?;
+                super::encrypted::write_atomic_pub(self.store.path(), &data)?;
+                self.store.set_sync_version(header.sync_version);
+            }
+            2 => {
+                // v2: use envelope decrypt to verify password
+                let _ = crate::envelope::decrypt(
+                    b"TCRE", master_password,
+                    crate::hw_id::get_hw_id().as_bytes(),
+                    &data,
+                ).context("wrong master password or corrupted import file")?;
+                // Password verified — safe to overwrite.
+                // Note: the imported file may have been encrypted on a different machine
+                // (different hw_id). We copy it as-is; the user will need to unlock
+                // with the same password. If hw_id differs, unlock will fail and
+                // the user should use cloud sync download instead.
+                super::encrypted::write_atomic_pub(self.store.path(), &data)?;
+            }
+            v => anyhow::bail!("unsupported import file version: {}", v),
+        }
         // Unlock with the imported file.
         self.unlock(master_password)?;
         let mut inner = self.inner.lock().unwrap();

@@ -1,6 +1,8 @@
 //! Encrypted credential store — AES-256-GCM with Argon2id key derivation.
 //!
-//! File format (all little-endian):
+//! Supports two format versions:
+//!
+//! **v1** (legacy, little-endian):
 //! ```text
 //! offset  size    field
 //! 0       4B      magic = b"TCRE"
@@ -10,10 +12,28 @@
 //! 33      8B      sync_version (u64)
 //! 41      N B     ciphertext (includes 16B GCM auth tag at the end)
 //! ```
+//! Direct KEK (from password + salt) encrypts data. sync_version in header.
 //!
-//! The header (magic + version + salt + nonce + sync_version) is used as
-//! Additional Authenticated Data (AAD) for AES-GCM, so any tampering with
-//! the header invalidates the ciphertext.
+//! **v2** (envelope encryption, little-endian):
+//! ```text
+//! offset  size    field
+//! 0       4B      magic = b"TCRE"
+//! 4       1B      version = 2
+//! 5       10B     argon2_params (m_cost:4 + t_cost:4 + p_cost:2)
+//! 15      16B     salt (Argon2id)
+//! 31      12B     nonce_kek (AES-GCM nonce for DEK wrapping)
+//! 43      48B     wrapped_dek (32B DEK + 16B GCM auth tag)
+//! 91      12B     nonce_data (AES-GCM nonce for data)
+//! 103     N B     ciphertext (includes 16B GCM auth tag)
+//! ```
+//! KEK (from password + hw_id + salt) wraps DEK. DEK encrypts data.
+//! sync_version is inside the encrypted payload (8B prefix).
+//! Argon2 params stored in header (upgradable). hw_id binds to machine.
+//!
+//! The header is used as AAD for AES-GCM (see envelope.rs for details).
+//!
+//! **Migration**: v1 files are read as-is. New writes always use v2.
+//! v1 → v2 migration happens on `change_password()` or `migrate()`.
 //!
 //! Legacy plaintext detection: a file whose first 4 bytes are NOT `b"TCRE"`
 //! is treated as a legacy plaintext JSON file that needs migration.
@@ -29,21 +49,22 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use argon2::Argon2;
 
+use crate::envelope;
+use crate::hw_id;
+
 /// File magic: "TermFast CREDential".
 const MAGIC: &[u8; 4] = b"TCRE";
-/// Current format version.
-const FORMAT_VERSION: u8 = 1;
+/// v1 format version (legacy, direct KEK).
+const FORMAT_VERSION_V1: u8 = 1;
+/// v2 format version (envelope encryption).
+const FORMAT_VERSION_V2: u8 = 2;
 /// Argon2id salt length in bytes.
 const SALT_LEN: usize = 16;
 /// AES-GCM nonce length in bytes.
 const NONCE_LEN: usize = 12;
-/// Header size before ciphertext: magic(4) + version(1) + salt(16) + nonce(12) + sync_version(8).
+/// v1 header size: magic(4) + version(1) + salt(16) + nonce(12) + sync_version(8).
 pub const HEADER_LEN: usize = 4 + 1 + SALT_LEN + NONCE_LEN + 8;
-/// Argon2id parameters.
-/// 32 MiB memory / 3 iterations / 1 lane — balances security and responsiveness
-/// across desktop and mobile. Above OWASP minimum (16 MiB / 2 iter) while
-/// avoiding the ANR risk of 64 MiB on low-end Android. Argon2id runs on
-/// background threads (spawn_blocking) so UI is not blocked.
+/// v1 Argon2id parameters (must match cloud-sync for v1 compat).
 const ARGON2_M_COST: u32 = 32768; // 32 MiB
 const ARGON2_T_COST: u32 = 3;
 const ARGON2_P_COST: u32 = 1;
@@ -89,7 +110,21 @@ impl EncryptedCredentialStore {
     pub fn open(path: PathBuf) -> Self {
         let sync_version = std::fs::read(&path)
             .ok()
-            .and_then(|data| read_header(&data).ok().map(|h| h.sync_version))
+            .and_then(|data| {
+                if data.len() < 5 {
+                    return None;
+                }
+                match data[4] {
+                    FORMAT_VERSION_V1 => read_header_v1(&data).ok().map(|h| h.sync_version),
+                    FORMAT_VERSION_V2 => {
+                        // v2: sync_version is inside encrypted payload,
+                        // can't read without password. Default to 0,
+                        // will be updated on unlock().
+                        Some(0)
+                    }
+                    _ => None,
+                }
+            })
             .unwrap_or(0);
         Self {
             path,
@@ -97,10 +132,23 @@ impl EncryptedCredentialStore {
         }
     }
 
-    /// True if the file exists and has a valid encrypted format header.
+    /// True if the file exists and has a valid encrypted format header (v1 or v2).
     pub fn is_initialized(&self) -> bool {
         match std::fs::read(&self.path) {
-            Ok(data) => read_header(&data).is_ok(),
+            Ok(data) => {
+                if data.len() < 5 {
+                    return false;
+                }
+                if &data[..4] != MAGIC {
+                    return false;
+                }
+                let version = data[4];
+                match version {
+                    FORMAT_VERSION_V1 => read_header_v1(&data).is_ok(),
+                    FORMAT_VERSION_V2 => envelope::parse_blob(MAGIC, &data).is_ok(),
+                    _ => false,
+                }
+            }
             Err(_) => false,
         }
     }
@@ -125,69 +173,157 @@ impl EncryptedCredentialStore {
     }
 
     /// First-time setup: encrypt the given credentials JSON with the
-    /// provided master password and write to disk. Generates a random
-    /// salt and sets sync_version = 0.
+    /// provided master password and write to disk (v2 envelope format).
+    /// Generates a random salt and sets sync_version = 0.
     pub fn initialize(&self, master_password: &str, credentials_json: &[u8]) -> Result<()> {
         if self.path.exists() && self.is_initialized() {
             bail!("credential store already initialized");
         }
+        // v2: prepend sync_version (0) to plaintext
+        let mut plaintext = Vec::with_capacity(8 + credentials_json.len());
+        plaintext.extend_from_slice(&0u64.to_le_bytes());
+        plaintext.extend_from_slice(credentials_json);
+
         let mut salt = [0u8; SALT_LEN];
         rng().fill_bytes(&mut salt);
-        let key = derive_key(master_password, &salt)?;
-        let ciphertext = encrypt_with_key(&key, &salt, 0, credentials_json)?;
-        let mut out = Vec::with_capacity(HEADER_LEN + ciphertext.ct.len());
-        out.extend_from_slice(MAGIC);
-        out.push(FORMAT_VERSION);
-        out.extend_from_slice(&salt);
-        out.extend_from_slice(&ciphertext.nonce);
-        out.extend_from_slice(&0u64.to_le_bytes());
-        out.extend_from_slice(&ciphertext.ct);
-        write_atomic(&self.path, &out)?;
+        let hw_id = hw_id::get_hw_id();
+        let params = envelope::Argon2Params::default_for_platform();
+
+        let blob = envelope::encrypt(MAGIC, master_password, &salt, hw_id.as_bytes(), params, &plaintext)
+            .map_err(|e| anyhow!("envelope encrypt failed: {}", e))?;
+        write_atomic(&self.path, &blob)?;
         self.state.lock().unwrap().sync_version = 0;
         Ok(())
     }
 
     /// Verify the master password and return the derived key for caching.
     /// Fails if the password is wrong (AES-GCM auth tag mismatch).
+    /// For v1: returns KEK. For v2: returns DEK (unwrapped from envelope).
     pub fn unlock(&self, master_password: &str) -> Result<DerivedKey> {
         let data = std::fs::read(&self.path).context("credential file not found")?;
-        let header = read_header(&data)?;
-        let key = derive_key(master_password, &header.salt)?;
-        // Verify by attempting decryption.
-        let _ = decrypt_with_key(&key, &header, &data[HEADER_LEN..])?;
-        Ok(key)
+        if data.len() < 5 {
+            bail!("file too short");
+        }
+        let version = data[4];
+        match version {
+            FORMAT_VERSION_V1 => {
+                // v1: derive KEK, verify by decryption
+                let header = read_header_v1(&data)?;
+                let key = derive_key(master_password, &header.salt)?;
+                let _ = decrypt_with_key(&key, &header, &data[HEADER_LEN..])?;
+                Ok(key)
+            }
+            FORMAT_VERSION_V2 => {
+                // v2: parse envelope, unwrap DEK
+                let hw_id = hw_id::get_hw_id();
+                let parsed = envelope::parse_blob(MAGIC, &data)
+                    .map_err(|e| anyhow!("parse envelope failed: {}", e))?;
+                let dek = envelope::unwrap_dek(master_password, hw_id.as_bytes(), &parsed)
+                    .map_err(|e| anyhow!("unlock failed: {}", e))?;
+                // Read sync_version from decrypted payload
+                let plaintext = envelope::decrypt_data_with_dek(
+                    MAGIC, &dek, parsed.nonce_data, parsed.ciphertext,
+                ).map_err(|e| anyhow!("decrypt failed: {}", e))?;
+                if plaintext.len() >= 8 {
+                    let sv = u64::from_le_bytes(plaintext[..8].try_into().unwrap());
+                    self.state.lock().unwrap().sync_version = sv;
+                }
+                Ok(DerivedKey::from_slice(&dek))
+            }
+            v => bail!("unsupported credential file version: {}", v),
+        }
     }
 
     /// Decrypt the credentials file using a previously unlocked key.
     /// Returns `Zeroizing<Vec<u8>>` so the plaintext is wiped from memory
-    /// when dropped.
+    /// when dropped. For v1: key is KEK. For v2: key is DEK.
+    /// Returns just the credentials JSON (sync_version prefix stripped for v2).
     pub fn decrypt(&self, key: &DerivedKey) -> Result<zeroize::Zeroizing<Vec<u8>>> {
         let data = std::fs::read(&self.path).context("credential file not found")?;
-        let header = read_header(&data)?;
-        let plaintext = decrypt_with_key(key, &header, &data[HEADER_LEN..])?;
-        Ok(zeroize::Zeroizing::new(plaintext))
+        if data.len() < 5 {
+            bail!("file too short");
+        }
+        let version = data[4];
+        match version {
+            FORMAT_VERSION_V1 => {
+                let header = read_header_v1(&data)?;
+                let plaintext = decrypt_with_key(key, &header, &data[HEADER_LEN..])?;
+                Ok(zeroize::Zeroizing::new(plaintext))
+            }
+            FORMAT_VERSION_V2 => {
+                let parsed = envelope::parse_blob(MAGIC, &data)
+                    .map_err(|e| anyhow!("parse envelope failed: {}", e))?;
+                let mut dek = [0u8; KEY_LEN];
+                dek.copy_from_slice(key.as_bytes());
+                let plaintext = envelope::decrypt_data_with_dek(
+                    MAGIC, &dek, parsed.nonce_data, parsed.ciphertext,
+                ).map_err(|e| anyhow!("decrypt failed: {}", e))?;
+                dek.zeroize();
+                // Strip sync_version prefix (first 8 bytes)
+                if plaintext.len() < 8 {
+                    bail!("decrypted payload too short for sync_version prefix");
+                }
+                Ok(zeroize::Zeroizing::new(plaintext[8..].to_vec()))
+            }
+            v => bail!("unsupported credential file version: {}", v),
+        }
     }
 
     /// Encrypt new credentials JSON with a cached key and write to disk.
     /// Increments sync_version by 1.
+    /// For v1: key is KEK, writes v1 format (preserves format).
+    /// For v2: key is DEK, writes v2 format (preserves header + wrapped DEK).
     pub fn encrypt(&self, key: &DerivedKey, credentials_json: &[u8]) -> Result<()> {
         let data = std::fs::read(&self.path).context("credential file not found")?;
-        let header = read_header(&data)?;
-        let next_sync = header.sync_version.wrapping_add(1);
-        let ct = encrypt_with_key(key, &header.salt, next_sync, credentials_json)?;
-        let mut out = Vec::with_capacity(HEADER_LEN + ct.ct.len());
-        out.extend_from_slice(MAGIC);
-        out.push(FORMAT_VERSION);
-        out.extend_from_slice(&header.salt);
-        out.extend_from_slice(&ct.nonce);
-        out.extend_from_slice(&next_sync.to_le_bytes());
-        out.extend_from_slice(&ct.ct);
-        write_atomic(&self.path, &out)?;
-        self.state.lock().unwrap().sync_version = next_sync;
-        Ok(())
+        if data.len() < 5 {
+            bail!("file too short");
+        }
+        let version = data[4];
+        match version {
+            FORMAT_VERSION_V1 => {
+                // v1: preserve v1 format (migration happens on change_password)
+                let header = read_header_v1(&data)?;
+                let next_sync = header.sync_version.wrapping_add(1);
+                let ct = encrypt_with_key(key, &header.salt, next_sync, credentials_json)?;
+                let mut out = Vec::with_capacity(HEADER_LEN + ct.ct.len());
+                out.extend_from_slice(MAGIC);
+                out.push(FORMAT_VERSION_V1);
+                out.extend_from_slice(&header.salt);
+                out.extend_from_slice(&ct.nonce);
+                out.extend_from_slice(&next_sync.to_le_bytes());
+                out.extend_from_slice(&ct.ct);
+                write_atomic(&self.path, &out)?;
+                self.state.lock().unwrap().sync_version = next_sync;
+                Ok(())
+            }
+            FORMAT_VERSION_V2 => {
+                // v2: use DEK to re-encrypt data, preserve header + wrapped DEK
+                let parsed = envelope::parse_blob(MAGIC, &data)
+                    .map_err(|e| anyhow!("parse envelope failed: {}", e))?;
+                let mut dek = [0u8; KEY_LEN];
+                dek.copy_from_slice(key.as_bytes());
+                let next_sync = self.state.lock().unwrap().sync_version.wrapping_add(1);
+                // Prepend sync_version to plaintext
+                let mut plaintext = Vec::with_capacity(8 + credentials_json.len());
+                plaintext.extend_from_slice(&next_sync.to_le_bytes());
+                plaintext.extend_from_slice(credentials_json);
+                let (new_nonce_data, new_ciphertext) = envelope::encrypt_data_with_dek(
+                    MAGIC, &dek, &plaintext,
+                ).map_err(|e| anyhow!("encrypt data failed: {}", e))?;
+                dek.zeroize();
+                let new_blob = envelope::assemble_blob(
+                    MAGIC, parsed.params, parsed.salt, parsed.nonce_kek,
+                    parsed.wrapped_dek, &new_nonce_data, &new_ciphertext,
+                );
+                write_atomic(&self.path, &new_blob)?;
+                self.state.lock().unwrap().sync_version = next_sync;
+                Ok(())
+            }
+            v => bail!("unsupported credential file version: {}", v),
+        }
     }
 
-    /// Migrate a legacy plaintext JSON file to encrypted format.
+    /// Migrate a legacy plaintext JSON file to v2 encrypted format.
     /// Reads the old plaintext, encrypts with the new master password,
     /// writes the encrypted file, then deletes the old plaintext file.
     pub fn migrate(&self, master_password: &str) -> Result<()> {
@@ -213,27 +349,46 @@ impl EncryptedCredentialStore {
         Ok(())
     }
 
-    /// Change the master password: decrypt with old, re-encrypt with new
-    /// (new random salt). sync_version is preserved.
+    /// Change the master password.
+    /// For v1: decrypt with old KEK, re-encrypt as v2 envelope (migration).
+    /// For v2: re-wrap DEK only (envelope core benefit — no data re-encryption).
+    /// sync_version is preserved.
     pub fn change_password(&self, old_password: &str, new_password: &str) -> Result<()> {
         let data = std::fs::read(&self.path).context("credential file not found")?;
-        let header = read_header(&data)?;
-        let old_key = derive_key(old_password, &header.salt)?;
-        let plaintext = decrypt_with_key(&old_key, &header, &data[HEADER_LEN..])?;
-        // Re-encrypt with new password + new salt.
-        let mut new_salt = [0u8; SALT_LEN];
-        rng().fill_bytes(&mut new_salt);
-        let new_key = derive_key(new_password, &new_salt)?;
-        let ct = encrypt_with_key(&new_key, &new_salt, header.sync_version, &plaintext)?;
-        let mut out = Vec::with_capacity(HEADER_LEN + ct.ct.len());
-        out.extend_from_slice(MAGIC);
-        out.push(FORMAT_VERSION);
-        out.extend_from_slice(&new_salt);
-        out.extend_from_slice(&ct.nonce);
-        out.extend_from_slice(&header.sync_version.to_le_bytes());
-        out.extend_from_slice(&ct.ct);
-        write_atomic(&self.path, &out)?;
-        Ok(())
+        if data.len() < 5 {
+            bail!("file too short");
+        }
+        let version = data[4];
+        let hw_id = hw_id::get_hw_id();
+        match version {
+            FORMAT_VERSION_V1 => {
+                // v1 → v2 migration: decrypt with old KEK, re-encrypt as v2
+                let header = read_header_v1(&data)?;
+                let old_key = derive_key(old_password, &header.salt)?;
+                let plaintext = decrypt_with_key(&old_key, &header, &data[HEADER_LEN..])?;
+                // v2 plaintext = sync_version(8B) + credentials_json
+                let mut v2_plaintext = Vec::with_capacity(8 + plaintext.len());
+                v2_plaintext.extend_from_slice(&header.sync_version.to_le_bytes());
+                v2_plaintext.extend_from_slice(&plaintext);
+                let mut new_salt = [0u8; SALT_LEN];
+                rng().fill_bytes(&mut new_salt);
+                let params = envelope::Argon2Params::default_for_platform();
+                let blob = envelope::encrypt(MAGIC, new_password, &new_salt, hw_id.as_bytes(), params, &v2_plaintext)
+                    .map_err(|e| anyhow!("envelope encrypt failed: {}", e))?;
+                write_atomic(&self.path, &blob)?;
+                self.state.lock().unwrap().sync_version = header.sync_version;
+                Ok(())
+            }
+            FORMAT_VERSION_V2 => {
+                // v2: re-wrap DEK only (no data re-encryption)
+                let new_blob = envelope::change_password(
+                    MAGIC, old_password, new_password, hw_id.as_bytes(), &data,
+                ).map_err(|e| anyhow!("change_password failed: {}", e))?;
+                write_atomic(&self.path, &new_blob)?;
+                Ok(())
+            }
+            v => bail!("unsupported credential file version: {}", v),
+        }
     }
 
     /// Export the encrypted file to `dest` (raw copy).
@@ -243,15 +398,33 @@ impl EncryptedCredentialStore {
     }
 
     /// Import an encrypted file from `src`, overwriting the local file.
-    /// Caller is responsible for re-unlocking with the appropriate master
-    /// password afterwards (the imported file may have a different salt).
+    /// Supports both v1 and v2 formats. Caller is responsible for
+    /// re-unlocking with the appropriate master password afterwards.
     pub fn import_from(&self, src: &Path) -> Result<()> {
         let data = std::fs::read(src).context("failed to read import file")?;
-        // Validate it's a valid encrypted file.
-        let _ = read_header(&data).context("import file is not a valid encrypted credential file")?;
+        if data.len() < 5 {
+            bail!("import file too short");
+        }
+        if &data[..4] != MAGIC {
+            bail!("import file is not a valid encrypted credential file");
+        }
+        let version = data[4];
+        match version {
+            FORMAT_VERSION_V1 => {
+                let _ = read_header_v1(&data).context("import file has invalid v1 header")?;
+            }
+            FORMAT_VERSION_V2 => {
+                let _ = envelope::parse_blob(MAGIC, &data)
+                    .map_err(|e| anyhow!("import file has invalid v2 header: {}", e))?;
+            }
+            v => bail!("unsupported import file version: {}", v),
+        }
         write_atomic(&self.path, &data)?;
-        let header = read_header(&data)?;
-        self.state.lock().unwrap().sync_version = header.sync_version;
+        // sync_version will be updated on next unlock (v2) or read from header (v1)
+        if version == FORMAT_VERSION_V1 {
+            let header = read_header_v1(&data)?;
+            self.state.lock().unwrap().sync_version = header.sync_version;
+        }
         Ok(())
     }
 
@@ -273,32 +446,32 @@ impl EncryptedCredentialStore {
 
 // === SECTION 1 END ===
 
-/// Parsed header fields.
+/// Parsed v1 header fields.
 pub struct Header {
     pub salt: [u8; SALT_LEN],
     pub nonce: [u8; NONCE_LEN],
     pub sync_version: u64,
 }
 
-/// Public wrappers for use by encrypted_adapter.
-pub fn read_header_pub(data: &[u8]) -> Result<Header> { read_header(data) }
+/// Public wrappers for use by encrypted_adapter (v1 compat).
+pub fn read_header_pub(data: &[u8]) -> Result<Header> { read_header_v1(data) }
 pub fn derive_key_pub(password: &str, salt: &[u8]) -> Result<DerivedKey> { derive_key(password, salt) }
 pub fn decrypt_with_key_pub(key: &DerivedKey, header: &Header, ciphertext: &[u8]) -> Result<Vec<u8>> {
     decrypt_with_key(key, header, ciphertext)
 }
 pub fn write_atomic_pub(path: &Path, data: &[u8]) -> Result<()> { write_atomic(path, data) }
 
-/// Read and validate the header from file bytes.
-fn read_header(data: &[u8]) -> Result<Header> {
+/// Read and validate the v1 header from file bytes.
+fn read_header_v1(data: &[u8]) -> Result<Header> {
     if data.len() < HEADER_LEN {
-        bail!("file too short for encrypted credential header");
+        bail!("file too short for v1 encrypted credential header");
     }
     if &data[..4] != MAGIC {
         bail!("bad magic: not an encrypted credential file");
     }
     let version = data[4];
-    if version != FORMAT_VERSION {
-        bail!("unsupported credential file version: {}", version);
+    if version != FORMAT_VERSION_V1 {
+        bail!("not a v1 credential file (version: {})", version);
     }
     let mut salt = [0u8; SALT_LEN];
     salt.copy_from_slice(&data[5..5 + SALT_LEN]);
@@ -352,7 +525,7 @@ fn encrypt_with_key(
     // AAD = magic + version + salt + nonce + sync_version (the full header).
     let mut aad = Vec::with_capacity(HEADER_LEN);
     aad.extend_from_slice(MAGIC);
-    aad.push(FORMAT_VERSION);
+    aad.push(FORMAT_VERSION_V1);
     aad.extend_from_slice(salt);
     aad.extend_from_slice(&nonce_bytes);
     aad.extend_from_slice(&sync_version.to_le_bytes());
@@ -371,7 +544,7 @@ fn encrypt_with_key(
 fn decrypt_with_key(key: &DerivedKey, header: &Header, ciphertext: &[u8]) -> Result<Vec<u8>> {
     let mut aad = Vec::with_capacity(HEADER_LEN);
     aad.extend_from_slice(MAGIC);
-    aad.push(FORMAT_VERSION);
+    aad.push(FORMAT_VERSION_V1);
     aad.extend_from_slice(&header.salt);
     aad.extend_from_slice(&header.nonce);
     aad.extend_from_slice(&header.sync_version.to_le_bytes());
@@ -452,8 +625,10 @@ mod tests {
         store.encrypt(&key, b"v2").unwrap();
         assert_eq!(store.sync_version(), 2);
 
-        // Re-open to verify persistence.
+        // Re-open and unlock to verify sync_version persistence.
+        // (v2 stores sync_version inside encrypted payload, so unlock is needed)
         let store2 = EncryptedCredentialStore::open(store_path(dir.path()));
+        let _key2 = store2.unlock("pw").unwrap();
         assert_eq!(store2.sync_version(), 2);
         let decrypted = store2.decrypt(&key).unwrap();
         assert_eq!(&*decrypted, b"v2");
