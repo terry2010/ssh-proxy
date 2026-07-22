@@ -3727,6 +3727,7 @@ async fn handle_cloud_sync_download(
         .await
         .map_err(|e| IpcError::new(ErrorCode::Internal, format!("download: {}", e)))?;
     let blob_size = blob.len();
+    tracing::info!("cloud_sync_download: downloaded {} bytes", blob_size);
 
     // Decrypt — on blocking thread (Argon2id)
     let mp = master_password.clone();
@@ -3737,8 +3738,12 @@ async fn handle_cloud_sync_download(
     .map_err(|e| IpcError::new(ErrorCode::Internal, format!("spawn_blocking: {}", e)))?;
 
     let payload = match decrypt_result {
-        Ok(p) => p,
-        Err(_) => {
+        Ok(p) => {
+            tracing::info!("cloud_sync_download: decrypt ok, device={}, updated_at={}", p.device_name, p.updated_at);
+            p
+        }
+        Err(e) => {
+            tracing::warn!("cloud_sync_download: decrypt failed: {}", e);
             // Decryption failed — password mismatch or corrupted data
             // Return a flag so the frontend can prompt for the cloud password
             return Ok(build_decrypt_failed_response());
@@ -3749,6 +3754,7 @@ async fn handle_cloud_sync_download(
     {
         let last_updated = sync_state.get(&provider).last_updated_at.as_deref().map(String::from);
         if let Some(rollback) = check_rollback_with_force(force_download, &payload, last_updated.as_deref()) {
+            tracing::info!("cloud_sync_download: rollback detected, returning rollback response");
             return Ok(rollback);
         }
     }
@@ -3758,6 +3764,7 @@ async fn handle_cloud_sync_download(
         serde_json::from_value(payload.config.clone())
             .map_err(|e| IpcError::new(ErrorCode::Internal, format!("parse config: {}", e)))?;
     apply_full_export(state, &export_data).await?;
+    tracing::info!("cloud_sync_download: apply_full_export done, config:changed broadcast sent");
 
     // Update sync state — record the config.json mtime AFTER apply, so that
     // on next download we can detect if the local config has been modified since.
