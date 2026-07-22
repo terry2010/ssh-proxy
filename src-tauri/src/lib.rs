@@ -1488,43 +1488,43 @@ fn create_tray_icon(_color: termfast_desktop::tray::TrayIconColor) -> tauri::ima
         }
     };
 
-    // Draw ">_" prompt and cursor block — thick (3px) lines
+    // Draw ">_" prompt and cursor block — very thick (4px) lines
     //
-    // ">" chevron: 3px thick, from left edge to center
-    //   Upper arm: (4,8) → (11,15)
-    //   Lower arm: (11,15) → (4,22)
-    // "_" underline: 3px thick
-    //   x: 13..19, y: 20..22
-    // Cursor block: solid rectangle
-    //   x: 21..27, y: 9..22
+    // ">" chevron: 4px thick
+    //   Upper arm: (3,7) → (12,16)
+    //   Lower arm: (12,16) → (3,25)
+    // "_" underline: 4px thick, wider
+    //   x: 14..22, y: 22..26
+    // Cursor block: solid rectangle, taller
+    //   x: 24..30, y: 8..26
 
-    // Draw ">" upper arm: from (4,8) to (11,15), 3px thick
-    for i in 0..=7 {
-        let px = 4 + i;
-        let py = 8 + i;
-        for t in 0..3 {
+    // Draw ">" upper arm: from (3,7) to (12,16), 4px thick
+    for i in 0..=9 {
+        let px = 3 + i;
+        let py = 7 + i;
+        for t in 0..4 {
             set_pixel(&mut rgba, px + t, py);
         }
     }
-    // Draw ">" lower arm: from (11,15) to (4,22), 3px thick
-    for i in 0..=7 {
-        let px = 11 - i;
-        let py = 15 + i;
-        for t in 0..3 {
+    // Draw ">" lower arm: from (12,16) to (3,25), 4px thick
+    for i in 0..=9 {
+        let px = 12 - i;
+        let py = 16 + i;
+        for t in 0..4 {
             set_pixel(&mut rgba, px + t, py);
         }
     }
 
-    // Draw "_" — thick horizontal bar
-    for px in 13..19 {
-        for py in 20..23 {
+    // Draw "_" — thick horizontal bar, wider
+    for px in 14..22 {
+        for py in 22..26 {
             set_pixel(&mut rgba, px, py);
         }
     }
 
-    // Draw cursor block — solid rectangle
-    for py in 9..23 {
-        for px in 21..28 {
+    // Draw cursor block — solid rectangle, taller
+    for py in 8..26 {
+        for px in 24..30 {
             set_pixel(&mut rgba, px, py);
         }
     }
