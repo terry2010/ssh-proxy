@@ -1924,23 +1924,9 @@ async fn handle_import_full(state: &DaemonState, params: &serde_json::Value) -> 
     // Reset attempt counter on success
     termfast_core::migration::reset_attempts();
 
-    // Apply config
-    {
-        let mgr = state.config_manager.lock().await;
-        mgr.modify(|config| {
-            *config = export_data.config.clone();
-        })
-        .await
-        .map_err(|e| IpcError::new(ErrorCode::Internal, e.to_string()))?;
-    } // mgr dropped here — releases the lock before re-acquiring below
-
-    // Sync ServerManager with the new config
-    state
-        .server_manager
-        .sync_from_config(&export_data.config.servers)
-        .await;
-
-    // Restore credentials
+    // Restore credentials FIRST (before config write) for crash safety.
+    // Credentials use atomic writes, so writing them early is harmless
+    // even if the process is killed before config.json is updated.
     for (server_id, pwd) in &export_data.passwords {
         let key =
             termfast_credential::make_key(server_id, termfast_credential::cred_type::PASSWORD);
@@ -1955,47 +1941,79 @@ async fn handle_import_full(state: &DaemonState, params: &serde_json::Value) -> 
     }
     // Restore key files — validate key_path to prevent path traversal
     // (H-1: imported key_path could point to arbitrary files like authorized_keys)
+    // Write atomically (tmp + rename) so a crash mid-write doesn't
+    // leave a truncated/corrupt key file.
     {
-        let mgr = state.config_manager.lock().await;
-        let config = mgr.get().await;
         for (server_id, content) in &export_data.key_files {
-            if let Some(server) = config.servers.iter().find(|s| s.id == *server_id) {
-                if server.ssh.key_path.is_empty() {
-                    continue;
-                }
-                // Only allow writing to ~/.ssh/ or app data dir; reject .. traversal
-                let key_path = std::path::Path::new(&server.ssh.key_path);
-                let canonical = match key_path.canonicalize() {
-                    Ok(p) => p,
-                    Err(_) => {
-                        // File may not exist yet; canonicalize parent
-                        match key_path.parent().and_then(|p| p.canonicalize().ok()) {
-                            Some(parent) => parent.join(key_path.file_name().unwrap_or_default()),
-                            None => continue,
-                        }
+            // Find the server's key_path from the NEW config (not current)
+            let key_path_str = export_data
+                .config
+                .servers
+                .iter()
+                .find(|s| s.id == *server_id)
+                .map(|s| s.ssh.key_path.clone())
+                .unwrap_or_default();
+            if key_path_str.is_empty() {
+                continue;
+            }
+            // Only allow writing to ~/.ssh/ or app data dir; reject .. traversal
+            let key_path = std::path::Path::new(&key_path_str);
+            let canonical = match key_path.canonicalize() {
+                Ok(p) => p,
+                Err(_) => {
+                    // File may not exist yet; canonicalize parent
+                    match key_path.parent().and_then(|p| p.canonicalize().ok()) {
+                        Some(parent) => parent.join(key_path.file_name().unwrap_or_default()),
+                        None => continue,
                     }
-                };
-                let home = directories::BaseDirs::new()
-                    .map(|d| d.home_dir().to_path_buf())
-                    .unwrap_or_default();
-                let ssh_dir = home.join(".ssh");
-                let is_safe = canonical.starts_with(&ssh_dir)
-                    || canonical.starts_with(std::env::temp_dir().join("termfast"));
-                if !is_safe {
-                    tracing::warn!("import_full: refusing to write key to {}", canonical.display());
-                    continue;
                 }
-                if let Err(e) = std::fs::write(&canonical, content) {
-                    tracing::warn!("import_full: failed to write key file {}: {}", canonical.display(), e);
-                }
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(&canonical, std::fs::Permissions::from_mode(0o600));
-                }
+            };
+            let home = directories::BaseDirs::new()
+                .map(|d| d.home_dir().to_path_buf())
+                .unwrap_or_default();
+            let ssh_dir = home.join(".ssh");
+            let is_safe = canonical.starts_with(&ssh_dir)
+                || canonical.starts_with(std::env::temp_dir().join("termfast"));
+            if !is_safe {
+                tracing::warn!("import_full: refusing to write key to {}", canonical.display());
+                continue;
+            }
+            // Atomic write: tmp file + rename
+            let tmp_path = canonical.with_extension("tmp");
+            if let Err(e) = std::fs::write(&tmp_path, content) {
+                tracing::warn!("import_full: failed to write key tmp {}: {}", tmp_path.display(), e);
+                continue;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o600));
+            }
+            if let Err(e) = std::fs::rename(&tmp_path, &canonical) {
+                tracing::warn!("import_full: failed to rename key file {}: {}", canonical.display(), e);
+                let _ = std::fs::remove_file(&tmp_path);
             }
         }
     }
+
+    // Apply config — LAST, so config.json only updates after all
+    // dependent data (credentials, key files) is safely written.
+    // mgr.modify() updates in-memory config AND atomically writes
+    // config.json (tmp + rename).
+    {
+        let mgr = state.config_manager.lock().await;
+        mgr.modify(|config| {
+            *config = export_data.config.clone();
+        })
+        .await
+        .map_err(|e| IpcError::new(ErrorCode::Internal, e.to_string()))?;
+    }
+
+    // Sync ServerManager with the new config
+    state
+        .server_manager
+        .sync_from_config(&export_data.config.servers)
+        .await;
 
     // Broadcast config changed
     state
@@ -4170,11 +4188,92 @@ async fn export_full_data(state: &DaemonState) -> Result<termfast_core::migratio
 
 /// Apply a FullExportData to the local config + credentials.
 /// Extracted from handle_import_full for reuse by cloud sync download.
+///
+/// Write order is carefully designed for crash safety:
+///   1. Write credentials (atomic per-key)
+///   2. Write key files (atomic per-file)
+///   3. Write config.json (atomic) — last, so if it succeeds, all
+///      dependent data (credentials, key files) is already in place.
+/// If the process is killed before step 3, config.json still has the
+/// old content and the extra credentials/key files are harmless.
 async fn apply_full_export(
     state: &DaemonState,
     export_data: &termfast_core::migration::FullExportData,
 ) -> Result<(), IpcError> {
-    // Apply config
+    // 1. Restore credentials (atomic per-key, safe to write before config)
+    for (server_id, pwd) in &export_data.passwords {
+        let key =
+            termfast_credential::make_key(server_id, termfast_credential::cred_type::PASSWORD);
+        let _ = state.credential_store.save(&key, pwd);
+    }
+    for (server_id, pass) in &export_data.key_passphrases {
+        let key = termfast_credential::make_key(
+            server_id,
+            termfast_credential::cred_type::KEY_PASSPHRASE,
+        );
+        let _ = state.credential_store.save(&key, pass);
+    }
+
+    // 2. Restore key files — validate key_path to prevent path traversal
+    //    Write atomically (tmp + rename) so a crash mid-write doesn't
+    //    leave a truncated/corrupt key file.
+    {
+        for (server_id, content) in &export_data.key_files {
+            // Find the server's key_path from the NEW config (not current)
+            let key_path_str = export_data
+                .config
+                .servers
+                .iter()
+                .find(|s| s.id == *server_id)
+                .map(|s| s.ssh.key_path.clone())
+                .unwrap_or_default();
+            if key_path_str.is_empty() {
+                continue;
+            }
+            let key_path = std::path::Path::new(&key_path_str);
+            let canonical = match key_path.canonicalize() {
+                Ok(p) => p,
+                Err(_) => {
+                    match key_path.parent().and_then(|p| p.canonicalize().ok()) {
+                        Some(parent) => parent.join(key_path.file_name().unwrap_or_default()),
+                        None => continue,
+                    }
+                }
+            };
+            let home = directories::BaseDirs::new()
+                .map(|d| d.home_dir().to_path_buf())
+                .unwrap_or_default();
+            let ssh_dir = home.join(".ssh");
+            let is_safe = canonical.starts_with(&ssh_dir)
+                || canonical.starts_with(std::env::temp_dir().join("termfast"));
+            if !is_safe {
+                tracing::warn!("apply_full_export: refusing to write key to {}", canonical.display());
+                continue;
+            }
+            // Atomic write: tmp file + rename
+            let tmp_path = canonical.with_extension("tmp");
+            if let Err(e) = std::fs::write(&tmp_path, content) {
+                tracing::warn!("apply_full_export: failed to write key tmp {}: {}", tmp_path.display(), e);
+                continue;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o600));
+            }
+            if let Err(e) = std::fs::rename(&tmp_path, &canonical) {
+                tracing::warn!("apply_full_export: failed to rename key file {}: {}", canonical.display(), e);
+                let _ = std::fs::remove_file(&tmp_path);
+            }
+        }
+    }
+
+    // 3. Apply config — LAST, so config.json only updates after all
+    //    dependent data (credentials, key files) is safely written.
+    //    mgr.modify() updates in-memory config AND atomically writes
+    //    config.json (tmp + rename). If this succeeds, the entire
+    //    apply is complete. If killed before this, config.json still
+    //    has the old content.
     {
         let mgr = state.config_manager.lock().await;
         mgr.modify(|config| {
@@ -4191,60 +4290,6 @@ async fn apply_full_export(
         .server_manager
         .sync_from_config(&export_data.config.servers)
         .await;
-
-    // Restore credentials
-    for (server_id, pwd) in &export_data.passwords {
-        let key =
-            termfast_credential::make_key(server_id, termfast_credential::cred_type::PASSWORD);
-        let _ = state.credential_store.save(&key, pwd);
-    }
-    for (server_id, pass) in &export_data.key_passphrases {
-        let key = termfast_credential::make_key(
-            server_id,
-            termfast_credential::cred_type::KEY_PASSPHRASE,
-        );
-        let _ = state.credential_store.save(&key, pass);
-    }
-    // Restore key files — validate key_path to prevent path traversal
-    {
-        let mgr = state.config_manager.lock().await;
-        let config = mgr.get().await;
-        for (server_id, content) in &export_data.key_files {
-            if let Some(server) = config.servers.iter().find(|s| s.id == *server_id) {
-                if server.ssh.key_path.is_empty() {
-                    continue;
-                }
-                let key_path = std::path::Path::new(&server.ssh.key_path);
-                let canonical = match key_path.canonicalize() {
-                    Ok(p) => p,
-                    Err(_) => {
-                        match key_path.parent().and_then(|p| p.canonicalize().ok()) {
-                            Some(parent) => parent.join(key_path.file_name().unwrap_or_default()),
-                            None => continue,
-                        }
-                    }
-                };
-                let home = directories::BaseDirs::new()
-                    .map(|d| d.home_dir().to_path_buf())
-                    .unwrap_or_default();
-                let ssh_dir = home.join(".ssh");
-                let is_safe = canonical.starts_with(&ssh_dir)
-                    || canonical.starts_with(std::env::temp_dir().join("termfast"));
-                if !is_safe {
-                    tracing::warn!("apply_full_export: refusing to write key to {}", canonical.display());
-                    continue;
-                }
-                if let Err(e) = std::fs::write(&canonical, content) {
-                    tracing::warn!("apply_full_export: failed to write key file {}: {}", canonical.display(), e);
-                }
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(&canonical, std::fs::Permissions::from_mode(0o600));
-                }
-            }
-        }
-    }
 
     // Broadcast config changed
     state
