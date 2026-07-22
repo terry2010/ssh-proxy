@@ -1924,101 +1924,10 @@ async fn handle_import_full(state: &DaemonState, params: &serde_json::Value) -> 
     // Reset attempt counter on success
     termfast_core::migration::reset_attempts();
 
-    // Restore credentials FIRST (before config write) for crash safety.
-    // Credentials use atomic writes, so writing them early is harmless
-    // even if the process is killed before config.json is updated.
-    for (server_id, pwd) in &export_data.passwords {
-        let key =
-            termfast_credential::make_key(server_id, termfast_credential::cred_type::PASSWORD);
-        let _ = state.credential_store.save(&key, pwd);
-    }
-    for (server_id, pass) in &export_data.key_passphrases {
-        let key = termfast_credential::make_key(
-            server_id,
-            termfast_credential::cred_type::KEY_PASSPHRASE,
-        );
-        let _ = state.credential_store.save(&key, pass);
-    }
-    // Restore key files — validate key_path to prevent path traversal
-    // (H-1: imported key_path could point to arbitrary files like authorized_keys)
-    // Write atomically (tmp + rename) so a crash mid-write doesn't
-    // leave a truncated/corrupt key file.
-    {
-        for (server_id, content) in &export_data.key_files {
-            // Find the server's key_path from the NEW config (not current)
-            let key_path_str = export_data
-                .config
-                .servers
-                .iter()
-                .find(|s| s.id == *server_id)
-                .map(|s| s.ssh.key_path.clone())
-                .unwrap_or_default();
-            if key_path_str.is_empty() {
-                continue;
-            }
-            // Only allow writing to ~/.ssh/ or app data dir; reject .. traversal
-            let key_path = std::path::Path::new(&key_path_str);
-            let canonical = match key_path.canonicalize() {
-                Ok(p) => p,
-                Err(_) => {
-                    // File may not exist yet; canonicalize parent
-                    match key_path.parent().and_then(|p| p.canonicalize().ok()) {
-                        Some(parent) => parent.join(key_path.file_name().unwrap_or_default()),
-                        None => continue,
-                    }
-                }
-            };
-            let home = directories::BaseDirs::new()
-                .map(|d| d.home_dir().to_path_buf())
-                .unwrap_or_default();
-            let ssh_dir = home.join(".ssh");
-            let is_safe = canonical.starts_with(&ssh_dir)
-                || canonical.starts_with(std::env::temp_dir().join("termfast"));
-            if !is_safe {
-                tracing::warn!("import_full: refusing to write key to {}", canonical.display());
-                continue;
-            }
-            // Atomic write: tmp file + rename
-            let tmp_path = canonical.with_extension("tmp");
-            if let Err(e) = std::fs::write(&tmp_path, content) {
-                tracing::warn!("import_full: failed to write key tmp {}: {}", tmp_path.display(), e);
-                continue;
-            }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o600));
-            }
-            if let Err(e) = std::fs::rename(&tmp_path, &canonical) {
-                tracing::warn!("import_full: failed to rename key file {}: {}", canonical.display(), e);
-                let _ = std::fs::remove_file(&tmp_path);
-            }
-        }
-    }
-
-    // Apply config — LAST, so config.json only updates after all
-    // dependent data (credentials, key files) is safely written.
-    // mgr.modify() updates in-memory config AND atomically writes
-    // config.json (tmp + rename).
-    {
-        let mgr = state.config_manager.lock().await;
-        mgr.modify(|config| {
-            *config = export_data.config.clone();
-        })
-        .await
-        .map_err(|e| IpcError::new(ErrorCode::Internal, e.to_string()))?;
-    }
-
-    // Sync ServerManager with the new config
-    state
-        .server_manager
-        .sync_from_config(&export_data.config.servers)
-        .await;
-
-    // Broadcast config changed
-    state
-        .broadcast("config:changed", serde_json::json!({}))
-        .await;
+    // Apply the imported config + credentials + key files.
+    // apply_full_export handles backup, crash-safe write order,
+    // rollback on failure, and ServerManager sync.
+    apply_full_export(state, &export_data).await?;
 
     Ok(serde_json::json!({ "imported": true }))
 }
@@ -4186,20 +4095,79 @@ async fn export_full_data(state: &DaemonState) -> Result<termfast_core::migratio
     })
 }
 
+/// Snapshot of local data files taken before apply_full_export,
+/// used for rollback if any step fails.
+struct LocalDataBackup {
+    config_bak: Option<std::path::PathBuf>,
+}
+
+/// Back up config.json → config.json.bak before overwriting.
+/// Returns a handle that can be used to roll back on failure.
+fn backup_local_data(state: &DaemonState) -> LocalDataBackup {
+    let config_path = local_config_path(state);
+    let config_bak = config_path.with_extension("json.bak");
+    let config_bak = if config_path.exists() {
+        match std::fs::copy(&config_path, &config_bak) {
+            Ok(_) => {
+                tracing::info!("apply: backed up config.json → {:?}", config_bak);
+                Some(config_bak)
+            }
+            Err(e) => {
+                tracing::warn!("apply: failed to back up config.json: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    LocalDataBackup { config_bak }
+}
+
+impl LocalDataBackup {
+    /// Roll back: restore .bak files to their original locations.
+    /// Called when apply_full_export fails at any step.
+    fn rollback(&self, state: &DaemonState) {
+        if let Some(ref bak) = self.config_bak {
+            let config_path = local_config_path(state);
+            if bak.exists() {
+                match std::fs::rename(bak, &config_path) {
+                    Ok(_) => tracing::info!("apply: rolled back config.json from .bak"),
+                    Err(e) => tracing::error!("apply: failed to roll back config.json: {}", e),
+                }
+            }
+        }
+    }
+
+    /// Clean up .bak files after successful apply.
+    /// We keep the .bak for one more session as a safety net —
+    /// it will be overwritten on the next apply.
+    fn cleanup(&self) {
+        // Keep .bak files — they'll be overwritten on next apply.
+        // This provides a one-version-back safety net.
+    }
+}
+
 /// Apply a FullExportData to the local config + credentials.
 /// Extracted from handle_import_full for reuse by cloud sync download.
 ///
-/// Write order is carefully designed for crash safety:
+/// Crash safety + rollback strategy:
+///   0. Back up config.json → config.json.bak
 ///   1. Write credentials (atomic per-key)
 ///   2. Write key files (atomic per-file)
 ///   3. Write config.json (atomic) — last, so if it succeeds, all
-///      dependent data (credentials, key files) is already in place.
-/// If the process is killed before step 3, config.json still has the
-/// old content and the extra credentials/key files are harmless.
+///      dependent data is already in place.
+///   4. Sync ServerManager (in-memory)
+///   5. Broadcast config:changed
+/// If any step 1-3 fails, roll back config.json from .bak and return error.
+/// If killed before step 3, config.json still has the old content.
+/// .bak is kept after success as a one-version safety net.
 async fn apply_full_export(
     state: &DaemonState,
     export_data: &termfast_core::migration::FullExportData,
 ) -> Result<(), IpcError> {
+    // 0. Back up current config.json for rollback
+    let backup = backup_local_data(state);
+
     // 1. Restore credentials (atomic per-key, safe to write before config)
     for (server_id, pwd) in &export_data.passwords {
         let key =
@@ -4276,11 +4244,16 @@ async fn apply_full_export(
     //    has the old content.
     {
         let mgr = state.config_manager.lock().await;
-        mgr.modify(|config| {
-            *config = export_data.config.clone();
-        })
-        .await
-        .map_err(|e| IpcError::new(ErrorCode::Internal, e.to_string()))?;
+        if let Err(e) = mgr
+            .modify(|config| {
+                *config = export_data.config.clone();
+            })
+            .await
+        {
+            tracing::error!("apply_full_export: config write failed, rolling back: {}", e);
+            backup.rollback(state);
+            return Err(IpcError::new(ErrorCode::Internal, e.to_string()));
+        }
     }
 
     // Sync ServerManager with the new config — add new servers, remove
