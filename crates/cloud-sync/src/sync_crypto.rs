@@ -1,23 +1,22 @@
 //! Cloud sync encryption — AES-256-GCM with Argon2id key derivation.
 //!
-//! File format (all little-endian):
+//! Supports two format versions:
+//!
+//! **v1** (legacy):
 //! ```text
-//! offset  size    field
-//! 0       4B      magic = b"TFSC" (config) or b"TFSS" (state)
-//! 4       1B      version = 1
-//! 5       16B     salt (Argon2id)
-//! 21      12B     nonce (AES-GCM)
-//! 33      N B     ciphertext (includes 16B GCM auth tag at the end)
+//! magic(4) + version=1(1) + salt(16) + nonce(12) + ciphertext
 //! ```
+//! Direct KEK from password+salt encrypts data. Argon2 params hardcoded.
 //!
-//! The header (magic + version + salt + nonce) is used as Additional
-//! Authenticated Data (AAD) for AES-GCM, so any tampering with the
-//! header invalidates the ciphertext.
+//! **v2** (envelope encryption):
+//! ```text
+//! magic(4) + version=2(1) + argon2_params(10) + salt(16) + nonce_kek(12) +
+//! wrapped_dek(48) + nonce_data(12) + ciphertext
+//! ```
+//! KEK from password+salt wraps DEK. DEK encrypts data.
+//! Argon2 params stored in header (upgradable). No hw_id binding (cross-device).
 //!
-//! Argon2id parameters match the local credential store (32 MiB / 3
-//! iterations / 1 lane). Argon2 is CPU-intensive — callers MUST run
-//! encrypt/decrypt on a `spawn_blocking` thread, never on the async
-//! executor.
+//! **Migration**: v1 files are still decryptable. New uploads use v2.
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
@@ -28,20 +27,24 @@ use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 use zeroize::Zeroizing;
 
+use termfast_credential::envelope;
+
 /// Magic for sync config data file: "TermFast Sync Config".
 pub const MAGIC_CONFIG: &[u8; 4] = b"TFSC";
 /// Magic for sync state file: "TermFast Sync State".
 pub const MAGIC_STATE: &[u8; 4] = b"TFSS";
 
-/// Current format version.
-const FORMAT_VERSION: u8 = 1;
+/// v1 format version (legacy).
+const FORMAT_VERSION_V1: u8 = 1;
+/// v2 format version (envelope encryption).
+const FORMAT_VERSION_V2: u8 = 2;
 /// Argon2id salt length in bytes.
 const SALT_LEN: usize = 16;
 /// AES-GCM nonce length in bytes.
 const NONCE_LEN: usize = 12;
-/// Header size before ciphertext: magic(4) + version(1) + salt(16) + nonce(12).
+/// v1 header size: magic(4) + version(1) + salt(16) + nonce(12).
 pub const HEADER_LEN: usize = 4 + 1 + SALT_LEN + NONCE_LEN;
-/// Argon2id parameters — must match credential store (encrypted.rs:47-49).
+/// v1 Argon2id parameters (must match for v1 compat).
 const ARGON2_M_COST: u32 = 32768; // 32 MiB
 const ARGON2_T_COST: u32 = 3;
 const ARGON2_P_COST: u32 = 1;
@@ -114,55 +117,53 @@ fn derive_key(password: &str, salt: &[u8]) -> Result<[u8; KEY_LEN], SyncCryptoEr
 }
 
 /// Encrypt plaintext with the given magic and password.
-/// Returns the full file blob: [magic][version][salt][nonce][ciphertext].
+/// Always writes v2 (envelope) format. No hw_id binding (cloud sync is cross-device).
 fn encrypt_blob(magic: &[u8; 4], password: &str, plaintext: &[u8]) -> Result<Vec<u8>, SyncCryptoError> {
-    let normalized = normalize_password(password)?;
-
     let mut salt = [0u8; SALT_LEN];
-    let mut nonce_bytes = [0u8; NONCE_LEN];
     rng().fill_bytes(&mut salt);
-    rng().fill_bytes(&mut nonce_bytes);
-
-    let key = derive_key(&normalized, &salt)?;
-
-    // AAD = magic + version + salt + nonce (full header binding).
-    let mut aad = Vec::with_capacity(HEADER_LEN);
-    aad.extend_from_slice(magic);
-    aad.push(FORMAT_VERSION);
-    aad.extend_from_slice(&salt);
-    aad.extend_from_slice(&nonce_bytes);
-
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    let ct = cipher
-        .encrypt(nonce, Payload { msg: plaintext, aad: &aad })
-        .map_err(|e| SyncCryptoError::Crypto(format!("aes-gcm encrypt failed: {}", e)))?;
-
-    let mut blob = Vec::with_capacity(HEADER_LEN + ct.len());
-    blob.extend_from_slice(magic);
-    blob.push(FORMAT_VERSION);
-    blob.extend_from_slice(&salt);
-    blob.extend_from_slice(&nonce_bytes);
-    blob.extend_from_slice(&ct);
-    Ok(blob)
+    let params = envelope::Argon2Params::default_for_platform();
+    // No hw_id binding for cloud sync (salt_extra = empty)
+    envelope::encrypt(magic, password, &salt, &[], params, plaintext)
+        .map_err(|e| match e {
+            envelope::EnvelopeError::PasswordTooLong(n, max) => SyncCryptoError::PasswordTooLong(n, max),
+            envelope::EnvelopeError::Crypto(msg) => SyncCryptoError::Crypto(msg),
+            _ => SyncCryptoError::Crypto(format!("envelope encrypt failed: {}", e)),
+        })
 }
 
-/// Decrypt a blob produced by `encrypt_blob`.
+/// Decrypt a blob produced by `encrypt_blob` (v2) or a legacy v1 blob.
 /// Returns the plaintext on success, or a unified error on failure
 /// (wrong password / corrupted data — not distinguished to avoid
 /// side-channel leakage).
 fn decrypt_blob(magic: &[u8; 4], password: &str, blob: &[u8]) -> Result<Vec<u8>, SyncCryptoError> {
-    let normalized = normalize_password(password)?;
-
-    if blob.len() < HEADER_LEN {
-        return Err(SyncCryptoError::TooShort(blob.len(), HEADER_LEN));
+    if blob.len() < 5 {
+        return Err(SyncCryptoError::TooShort(blob.len(), 5));
     }
     if &blob[..4] != magic {
         return Err(SyncCryptoError::InvalidMagic);
     }
     let version = blob[4];
-    if version != FORMAT_VERSION {
-        return Err(SyncCryptoError::UnsupportedVersion(version));
+    match version {
+        FORMAT_VERSION_V1 => decrypt_blob_v1(magic, password, blob),
+        FORMAT_VERSION_V2 => {
+            // v2: use envelope decrypt (no hw_id binding)
+            envelope::decrypt(magic, password, &[], blob)
+                .map_err(|e| match e {
+                    envelope::EnvelopeError::DecryptFailed => SyncCryptoError::DecryptFailed,
+                    envelope::EnvelopeError::TooShort(n, min) => SyncCryptoError::TooShort(n, min),
+                    _ => SyncCryptoError::Crypto(format!("envelope decrypt failed: {}", e)),
+                })
+        }
+        v => Err(SyncCryptoError::UnsupportedVersion(v)),
+    }
+}
+
+/// Decrypt a legacy v1 blob (direct KEK, hardcoded Argon2 params).
+fn decrypt_blob_v1(magic: &[u8; 4], password: &str, blob: &[u8]) -> Result<Vec<u8>, SyncCryptoError> {
+    let normalized = normalize_password(password)?;
+
+    if blob.len() < HEADER_LEN {
+        return Err(SyncCryptoError::TooShort(blob.len(), HEADER_LEN));
     }
     let salt = &blob[5..5 + SALT_LEN];
     let nonce_bytes = &blob[5 + SALT_LEN..5 + SALT_LEN + NONCE_LEN];
@@ -173,7 +174,7 @@ fn decrypt_blob(magic: &[u8; 4], password: &str, blob: &[u8]) -> Result<Vec<u8>,
     // Reconstruct AAD from the parsed header.
     let mut aad = Vec::with_capacity(HEADER_LEN);
     aad.extend_from_slice(magic);
-    aad.push(version);
+    aad.push(FORMAT_VERSION_V1);
     aad.extend_from_slice(salt);
     aad.extend_from_slice(nonce_bytes);
 
@@ -333,9 +334,9 @@ mod tests {
     fn test_tamper_version_fails() {
         let payload = test_payload();
         let mut blob = encrypt_config("pw1234567890ab", &payload).unwrap();
-        blob[4] = 2; // change version
+        blob[4] = 99; // change to unsupported version
         let result = decrypt_config("pw1234567890ab", &blob);
-        assert!(matches!(result, Err(SyncCryptoError::UnsupportedVersion(2))));
+        assert!(matches!(result, Err(SyncCryptoError::UnsupportedVersion(99))));
     }
 
     #[test]
@@ -419,5 +420,50 @@ mod tests {
         assert_eq!(truncate_utf8("中文字符测试", 3), "中文字");
         // Don't split in the middle of a multi-byte char (shouldn't happen with chars())
         assert_eq!(truncate_utf8("ab中", 2), "ab");
+    }
+
+    /// Create a v1 blob for backward compat testing.
+    fn encrypt_blob_v1(magic: &[u8; 4], password: &str, plaintext: &[u8]) -> Vec<u8> {
+        let normalized = normalize_password(password).unwrap();
+        let mut salt = [0u8; SALT_LEN];
+        let mut nonce_bytes = [0u8; NONCE_LEN];
+        rng().fill_bytes(&mut salt);
+        rng().fill_bytes(&mut nonce_bytes);
+        let key = derive_key(&normalized, &salt).unwrap();
+        let mut aad = Vec::with_capacity(HEADER_LEN);
+        aad.extend_from_slice(magic);
+        aad.push(FORMAT_VERSION_V1);
+        aad.extend_from_slice(&salt);
+        aad.extend_from_slice(&nonce_bytes);
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ct = cipher.encrypt(nonce, Payload { msg: plaintext, aad: &aad }).unwrap();
+        let mut blob = Vec::with_capacity(HEADER_LEN + ct.len());
+        blob.extend_from_slice(magic);
+        blob.push(FORMAT_VERSION_V1);
+        blob.extend_from_slice(&salt);
+        blob.extend_from_slice(&nonce_bytes);
+        blob.extend_from_slice(&ct);
+        blob
+    }
+
+    #[test]
+    fn test_v1_backward_compat() {
+        // v1 encrypted blob should be decryptable with current code
+        let payload = test_payload();
+        let plaintext = serde_json::to_vec(&payload).unwrap();
+        let v1_blob = encrypt_blob_v1(MAGIC_CONFIG, "testPassword123", &plaintext);
+        // Decrypt v1 blob
+        let decrypted = decrypt_config("testPassword123", &v1_blob).unwrap();
+        assert_eq!(decrypted.device_name, payload.device_name);
+        assert_eq!(decrypted.config, payload.config);
+    }
+
+    #[test]
+    fn test_v2_encrypt_produces_v2_format() {
+        let payload = test_payload();
+        let blob = encrypt_config("pw", &payload).unwrap();
+        // Version byte should be 2
+        assert_eq!(blob[4], FORMAT_VERSION_V2);
     }
 }
