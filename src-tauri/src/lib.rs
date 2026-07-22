@@ -1274,6 +1274,7 @@ async fn ipc_cloud_sync_upload(
     provider: String,
     master_password: Option<String>,
     sync_path: Option<String>,
+    force: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     // Block upload if credential store is in pending mode (no master password
     // set). Uploading without a local master password doesn't make sense.
@@ -1304,6 +1305,9 @@ async fn ipc_cloud_sync_upload(
     });
     if let Some(sp) = sync_path {
         params["sync_path"] = serde_json::json!(sp);
+    }
+    if let Some(f) = force {
+        params["force"] = serde_json::json!(f);
     }
     forward_to_daemon(
         &state,

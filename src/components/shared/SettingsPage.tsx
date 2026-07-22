@@ -1165,7 +1165,7 @@ function CloudSyncSection() {
         const { ask } = await import("@tauri-apps/plugin-dialog");
         const confirmed = await ask(
           (res.message || "输入的主密码与本地主密码不一致") + "\n\n是否现在修改主密码？",
-          { title: "主密码不正确", kind: "warning" }
+          { title: "主密码不正确", kind: "warning", okLabel: t("common.ok"), cancelLabel: t("common.cancel") }
         );
         if (confirmed) {
           // Navigate to settings credential section — trigger change password
@@ -1179,7 +1179,7 @@ function CloudSyncSection() {
         const { ask } = await import("@tauri-apps/plugin-dialog");
         const confirmed = await ask(
           res.message || "输入的密码与上次云同步使用的密码不一致。继续上传将用新密码加密云端数据。是否更换云端密码？",
-          { title: "更换云端密码？", kind: "warning" }
+          { title: "更换云端密码？", kind: "warning", okLabel: t("common.ok"), cancelLabel: t("common.cancel") }
         );
         if (confirmed) {
           await upload(masterPassword, true);
@@ -1194,7 +1194,7 @@ function CloudSyncSection() {
         const { ask } = await import("@tauri-apps/plugin-dialog");
         const confirmed = await ask(
           res.message || "云端已有数据，是否强行覆盖？",
-          { title: "覆盖云端数据？", kind: "warning" }
+          { title: "覆盖云端数据？", kind: "warning", okLabel: t("common.ok"), cancelLabel: t("common.cancel") }
         );
         if (confirmed) {
           await upload(masterPassword, true);
@@ -1249,7 +1249,7 @@ function CloudSyncSection() {
         const { ask } = await import("@tauri-apps/plugin-dialog");
         const confirmed = await ask(
           (res.message || "输入的主密码与本地主密码不一致") + "\n\n是否现在修改主密码？",
-          { title: "主密码不正确", kind: "warning" }
+          { title: "主密码不正确", kind: "warning", okLabel: t("common.ok"), cancelLabel: t("common.cancel") }
         );
         if (confirmed) {
           toast.info("请在「凭据安全」区域修改主密码后重新下载");
@@ -1266,7 +1266,7 @@ function CloudSyncSection() {
           const { ask } = await import("@tauri-apps/plugin-dialog");
           if (await ask(
             `本地数据比云端新，下载将覆盖本地最近改动，此操作不可撤销。\n\n云端时间：${cloudTime}\n本地时间：${localTime}\n\n确定要继续下载吗？`,
-            { title: "覆盖本地数据？", kind: "warning" }
+            { title: "覆盖本地数据？", kind: "warning", okLabel: t("common.ok"), cancelLabel: t("common.cancel") }
           )) {
             // User confirmed — retry with force_download=true
             setBusy(false);
@@ -1291,7 +1291,7 @@ function CloudSyncSection() {
         } else if (res.reason === "rollback_warning") {
           // Cloud data is older than local last sync — confirm overwrite
           const { ask } = await import("@tauri-apps/plugin-dialog");
-          if (await ask(res.message || "云端数据比本地旧，确定要下载吗？", { title: "确认下载", kind: "warning" })) {
+          if (await ask(res.message || "云端数据比本地旧，确定要下载吗？", { title: "确认下载", kind: "warning", okLabel: t("common.ok"), cancelLabel: t("common.cancel") })) {
             setBusy(false);
             await download(masterPassword, true);
             return;
