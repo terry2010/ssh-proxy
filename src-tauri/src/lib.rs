@@ -1470,101 +1470,17 @@ async fn ipc_cloud_sync_wait_callback(
     .await
 }
 
-/// Create a tray icon image — transparent background with a thick white
-/// terminal prompt ">_" and cursor block, inside a thin rounded square border.
+/// Create a tray icon image — loaded from icons/tray-icon.png (embedded at compile time).
 /// Uses icon_as_template(true) so macOS auto-inverts on light/dark menus.
-/// 32x32 RGBA.
 fn create_tray_icon(_color: termfast_desktop::tray::TrayIconColor) -> tauri::image::Image<'static> {
-    let size = 32u32;
-    let mut rgba = vec![0u8; (size * size * 4) as usize];
-
-    // Transparent background, white foreground (template image)
-    let fg = [255u8, 255, 255, 255];
-
-    let mut set_pixel = |rgba: &mut [u8], x: i32, y: i32| {
-        if x >= 0 && x < size as i32 && y >= 0 && y < size as i32 {
-            let idx = ((y * size as i32 + x) * 4) as usize;
-            rgba[idx..idx + 4].copy_from_slice(&fg);
-        }
-    };
-
-    // Draw rounded square border — 1px thick, 1px inset
-    // Outer bounds: (1,1) to (30,30), corner radius = 7
-    let lo = 1i32;
-    let hi = 30i32;
-    let cr = 7i32;
-    let span = hi - lo; // 29
-
-    for y in lo..=hi {
-        for x in lo..=hi {
-            let dx = x - lo;
-            let dy = y - lo;
-            // Top/bottom straight edges
-            let top_bottom = (y == lo || y == hi) && dx >= cr && dx <= span - cr;
-            // Left/right straight edges
-            let left_right = (x == lo || x == hi) && dy >= cr && dy <= span - cr;
-            // Four corners — arc points at radius cr from corner center
-            let r_sq = (cr * cr) as i32;
-            let r_inner_sq = ((cr - 1) * (cr - 1)) as i32;
-            let corner_pt = |cx: i32, cy: i32| {
-                let ddx = x - cx;
-                let ddy = y - cy;
-                let d = ddx * ddx + ddy * ddy;
-                d >= r_inner_sq && d <= r_sq + 2
-            };
-            let tl = dx < cr && dy < cr && corner_pt(lo + cr, lo + cr);
-            let tr = (span - dx) < cr && dy < cr && corner_pt(hi - cr, lo + cr);
-            let bl = dx < cr && (span - dy) < cr && corner_pt(lo + cr, hi - cr);
-            let br = (span - dx) < cr && (span - dy) < cr && corner_pt(hi - cr, hi - cr);
-            if top_bottom || left_right || tl || tr || bl || br {
-                set_pixel(&mut rgba, x, y);
-            }
-        }
-    }
-
-    // Draw ">_" prompt and cursor block — thick (4px) lines
-    // Centered within the border with generous padding (2x previous)
-    //
-    // ">" chevron: 4px thick
-    //   Upper arm: (9,12) → (14,17)
-    //   Lower arm: (14,17) → (9,22)
-    // "_" underline: 6px thick (wider bar)
-    //   x: 17..22, y: 21..27
-    // Cursor block: square 8x8
-    //   x: 24..32 → clamp to 24..30, y: 12..20
-
-    // Draw ">" upper arm: from (9,12) to (14,17), 4px thick
-    for i in 0..=5 {
-        let px = 9 + i;
-        let py = 12 + i;
-        for t in 0..4 {
-            set_pixel(&mut rgba, px + t, py);
-        }
-    }
-    // Draw ">" lower arm: from (14,17) to (9,22), 4px thick
-    for i in 0..=5 {
-        let px = 14 - i;
-        let py = 17 + i;
-        for t in 0..4 {
-            set_pixel(&mut rgba, px + t, py);
-        }
-    }
-
-    // Draw "_" — very thick horizontal bar (6px)
-    for px in 17..22 {
-        for py in 21..27 {
-            set_pixel(&mut rgba, px, py);
-        }
-    }
-
-    // Draw cursor block — square 8x8
-    for py in 12..20 {
-        for px in 20..26 {
-            set_pixel(&mut rgba, px, py);
-        }
-    }
-
-    tauri::image::Image::new_owned(rgba, size, size)
+    tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
+        .unwrap_or_else(|e| {
+            tracing::error!("failed to load tray-icon.png: {}", e);
+            // Fallback: simple 32x32 white square
+            let size = 32u32;
+            let rgba = vec![255u8; (size * size * 4) as usize];
+            tauri::image::Image::new_owned(rgba, size, size)
+        })
 }
 
 /// Get the system locale for language detection.
