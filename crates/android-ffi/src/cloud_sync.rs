@@ -52,7 +52,7 @@ fn pending_auth() -> &'static std::sync::Mutex<PendingAuth> {
 }
 
 /// Get the app's data directory (set by `nativeSetDataDir`).
-fn data_dir() -> PathBuf {
+pub fn data_dir() -> PathBuf {
     let st = crate::jni::state().lock().unwrap();
     PathBuf::from(&st.data_dir)
 }
