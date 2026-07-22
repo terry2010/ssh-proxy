@@ -1162,22 +1162,21 @@ function CloudSyncSection() {
       }
       // Handle password mismatch — ask user to confirm cloud password change
       if (res.ok === false && res.reason === "password_mismatch") {
-        // Use window.confirm for simplicity (Tauri webview supports it)
         const confirmed = await confirm(
           res.message || "输入的密码与上次云同步使用的密码不一致。继续上传将用新密码加密云端数据。是否更换云端密码？"
         );
         if (confirmed) {
-          // Re-upload with force=true to skip the mismatch warning
           await upload(masterPassword, true);
           return;
         } else {
           return;
         }
       }
-      if (res.ok === false && res.reason === "conflict") {
-        // Conflict — ask user to force upload
+      // Handle conflict — daemon returns {conflict: true, reason: "..."}
+      // Note: conflict response has NO "ok" field, so check res.conflict
+      if (res.conflict === true) {
         const confirmed = await confirm(
-          res.message || "云端数据已被其他设备更新，是否覆盖？"
+          res.message || "云端已有数据，是否强行覆盖？"
         );
         if (confirmed) {
           await upload(masterPassword, true);
