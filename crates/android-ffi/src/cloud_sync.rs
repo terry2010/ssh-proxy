@@ -547,6 +547,23 @@ pub fn download(params_json: &str) -> Result<String, String> {
                     })
                     .to_string());
                 }
+
+                // Cloud unchanged but local changed → local is newer than cloud.
+                // Downloading would overwrite newer local data — ask user to confirm.
+                let local_changed = match (&last_local_mtime, &current_local_mtime) {
+                    (Some(last), Some(cur)) => last != cur,
+                    _ => false,
+                };
+                if local_changed {
+                    return Ok(serde_json::json!({
+                        "ok": false,
+                        "reason": "local_newer",
+                        "message": "本地数据比云端新，下载将覆盖本地改动",
+                        "cloud_updated_at": remote_info.modified,
+                        "local_updated_at": local_updated_at,
+                    })
+                    .to_string());
+                }
             }
         }
     }

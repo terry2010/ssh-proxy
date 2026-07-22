@@ -257,6 +257,18 @@ fun CloudSyncSection() {
                                 "cloud_updated_at" to resp.cloud_updated_at,
                                 "local_updated_at" to resp.local_updated_at,
                                 "cached_password" to pw,
+                                "scenario" to "no_update",
+                            ))
+                        }
+                        resp.reason == "local_newer" -> {
+                            // Local data is newer than cloud — downloading would
+                            // overwrite newer local data. Show confirmation dialog.
+                            showDownloadDialog = null
+                            showOverwriteConfirmDialog = Pair(p, mapOf(
+                                "cloud_updated_at" to resp.cloud_updated_at,
+                                "local_updated_at" to resp.local_updated_at,
+                                "cached_password" to pw,
+                                "scenario" to "local_newer",
                             ))
                         }
                         resp.reason == "no_remote_data" -> {
@@ -328,20 +340,26 @@ fun CloudSyncSection() {
         )
     }
 
-    // Overwrite confirm dialog (1st confirm) — cloud has no update,
-    // user wants to overwrite newer local data with older cloud data.
+    // Overwrite confirm dialog (1st confirm) — cloud has no update or local is newer,
+    // user wants to overwrite local data with cloud data.
     if (showOverwriteConfirmDialog != null) {
         val provider = showOverwriteConfirmDialog!!.first
         val info = showOverwriteConfirmDialog!!.second
+        val isLocalNewer = info["scenario"] == "local_newer"
+        val dialogText = if (isLocalNewer) {
+            "本地数据比云端新，下载将覆盖本地最近改动，此操作不可撤销。\n\n" +
+            "云端时间：${formatTimestamp(info["cloud_updated_at"])}\n" +
+            "本地时间：${formatTimestamp(info["local_updated_at"])}"
+        } else {
+            "云端数据与本地一致，无需下载。\n" +
+            "如果你仍想用云端数据覆盖本地，本地最近改动将丢失，此操作不可撤销。\n\n" +
+            "云端时间：${formatTimestamp(info["cloud_updated_at"])}\n" +
+            "本地时间：${formatTimestamp(info["local_updated_at"])}"
+        }
         AlertDialog(
             onDismissRequest = { showOverwriteConfirmDialog = null },
             title = { Text("覆盖本地数据？") },
-            text = {
-                Text("云端数据与本地一致，无需下载。\n" +
-                    "如果你仍想用云端数据覆盖本地，本地最近改动将丢失，此操作不可撤销。\n\n" +
-                    "云端时间：${formatTimestamp(info["cloud_updated_at"])}\n" +
-                    "本地时间：${formatTimestamp(info["local_updated_at"])}")
-            },
+            text = { Text(dialogText) },
             confirmButton = {
                 TextButton(onClick = {
                     val cachedPw = info["cached_password"]

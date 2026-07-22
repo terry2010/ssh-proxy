@@ -3219,6 +3219,49 @@ mod tests {
         assert!(!is_no_update(&remote, Some("abc123"), Some("1000"), None));
         assert!(!is_no_update(&remote, Some("abc123"), None, None));
     }
+
+    /// is_local_newer — 云端 hash 未变但本地 mtime 变了 → true
+    #[test]
+    fn test_is_local_newer_true() {
+        let remote = make_remote(true, Some("abc123"));
+        assert!(is_local_newer(&remote, Some("abc123"), Some("1000"), Some("2000")));
+    }
+
+    /// is_local_newer — 云端 hash 变了 → false（云端有更新，不是 local_newer 场景）
+    #[test]
+    fn test_is_local_newer_cloud_changed() {
+        let remote = make_remote(true, Some("abc123"));
+        assert!(!is_local_newer(&remote, Some("different"), Some("1000"), Some("2000")));
+    }
+
+    /// is_local_newer — 云端和本地都没变 → false
+    #[test]
+    fn test_is_local_newer_both_unchanged() {
+        let remote = make_remote(true, Some("abc123"));
+        assert!(!is_local_newer(&remote, Some("abc123"), Some("1000"), Some("1000")));
+    }
+
+    /// is_local_newer — mtime 缺失 → false（无法判断，不拦截）
+    #[test]
+    fn test_is_local_newer_missing_mtime() {
+        let remote = make_remote(true, Some("abc123"));
+        assert!(!is_local_newer(&remote, Some("abc123"), None, Some("1000")));
+        assert!(!is_local_newer(&remote, Some("abc123"), Some("1000"), None));
+    }
+
+    /// build_local_newer_response — 验证响应格式
+    #[test]
+    fn test_build_local_newer_response() {
+        let resp = build_local_newer_response(
+            Some("2026-07-21T18:40:00Z"),
+            Some("2026-07-21T19:05:00Z"),
+        );
+        assert_eq!(resp["ok"], false);
+        assert_eq!(resp["reason"], "local_newer");
+        assert!(resp["message"].as_str().unwrap().contains("本地数据比云端新"));
+        assert_eq!(resp["cloud_updated_at"], "2026-07-21T18:40:00Z");
+        assert_eq!(resp["local_updated_at"], "2026-07-21T19:05:00Z");
+    }
 }
 
 /// Helper: if request came from CLI, broadcast cli:focus to GUI
@@ -3649,6 +3692,21 @@ async fn handle_cloud_sync_download(
         ));
     }
 
+    // If cloud is unchanged but local has been modified since last sync,
+    // downloading would overwrite newer local data — ask user to confirm.
+    // force_download=true skips this check (user already confirmed).
+    if !force_download && is_local_newer(
+        &remote_info,
+        local_hash,
+        last_local_mtime.as_deref(),
+        current_local_mtime.as_deref(),
+    ) {
+        return Ok(build_local_newer_response(
+            remote_info.modified.as_deref(),
+            local_updated_at.as_deref(),
+        ));
+    }
+
     // Download from cloud
     let blob = p
         .download(&stored.token, &sync_path)
@@ -4015,6 +4073,53 @@ pub fn is_no_update(
         (Some(last), Some(cur)) => last == cur,
         _ => false,
     }
+}
+
+/// Check if local data is newer than cloud — i.e., cloud is unchanged
+/// since last sync but local config has been modified.
+///
+/// Returns true only if ALL of:
+/// 1. Cloud hash matches the hash recorded at last sync (cloud unchanged)
+/// 2. Local config mtime differs from the mtime recorded at last sync (local changed)
+///
+/// In this case, downloading would overwrite newer local data with older cloud data.
+/// The caller should return a `local_newer` response so the frontend can ask
+/// the user to confirm before proceeding.
+pub fn is_local_newer(
+    remote_info: &termfast_cloud_sync::RemoteFileInfo,
+    local_hash: Option<&str>,
+    last_local_mtime: Option<&str>,
+    current_local_mtime: Option<&str>,
+) -> bool {
+    // Cloud unchanged?
+    let cloud_unchanged = match (&remote_info.hash, local_hash) {
+        (Some(rh), Some(lh)) => rh == lh,
+        _ => false,
+    };
+    if !cloud_unchanged {
+        return false;
+    }
+    // Local changed? (need both mtime values to compare; missing → can't tell → false)
+    match (last_local_mtime, current_local_mtime) {
+        (Some(last), Some(cur)) => last != cur,
+        _ => false,
+    }
+}
+
+/// Build the "local is newer than cloud" response (download handler).
+/// The frontend should show a confirmation dialog before proceeding,
+/// because downloading will overwrite newer local data with older cloud data.
+pub fn build_local_newer_response(
+    cloud_updated_at: Option<&str>,
+    local_updated_at: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "ok": false,
+        "reason": "local_newer",
+        "message": "本地数据比云端新，下载将覆盖本地改动",
+        "cloud_updated_at": cloud_updated_at,
+        "local_updated_at": local_updated_at,
+    })
 }
 
 async fn export_full_data(state: &DaemonState) -> Result<termfast_core::migration::FullExportData, IpcError> {
