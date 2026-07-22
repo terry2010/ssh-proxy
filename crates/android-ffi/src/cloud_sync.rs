@@ -656,7 +656,7 @@ pub fn download(params_json: &str) -> Result<String, String> {
             return Ok(serde_json::json!({
                 "ok": false,
                 "reason": "decrypt_failed",
-                "message": "解密失败，主密码与云端不一致或数据损坏",
+                "message": "解密失败。可能原因：\n1. 输入的密码与云端数据加密时使用的主密码不一致\n2. 云端数据已损坏\n\n请确认密码是否正确，或在设置中修改本地主密码后重试。",
             })
             .to_string());
         }
